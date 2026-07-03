@@ -22,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->expectsJson() || $request->ajax() || $request->header('X-Livewire')) {
                 return response()->json([
                     'status'    => 'error',
+                    'timestamp' => date('Y-m-d H:i:s'),
                     'message'   => $e->getMessage(),
                     'exception' => get_class($e),
                     'file'      => str_replace(base_path(), '', $e->getFile()), // Hide absolute server path

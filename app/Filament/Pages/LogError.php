@@ -22,6 +22,8 @@ class LogError extends Page
 
     public string $logContent = '';
     public ?string $activeLogFile = null;
+    public ?string $fileLastModified = null;
+    public ?string $lastRefreshedAt = null;
 
     public function mount(): void
     {
@@ -34,6 +36,8 @@ class LogError extends Page
 
         if ($logPath && File::exists($logPath)) {
             $this->activeLogFile = basename($logPath);
+            $this->fileLastModified = date('Y-m-d H:i:s', filemtime($logPath));
+            $this->lastRefreshedAt = date('Y-m-d H:i:s');
             $fileSize = File::size($logPath);
             
             if ($fileSize === 0) {
@@ -51,6 +55,8 @@ class LogError extends Page
             $this->logContent = $chunk;
         } else {
             $this->activeLogFile = null;
+            $this->fileLastModified = null;
+            $this->lastRefreshedAt = null;
             $this->logContent = 'Tidak ada file log ditemukan di storage/logs.';
         }
     }

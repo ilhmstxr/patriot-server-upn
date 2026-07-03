@@ -2,11 +2,29 @@
     <div class="space-y-6">
         <div class="flex justify-between items-center gap-3">
             <div>
-                <p class="text-sm text-gray-500 dark:text-gray-400">
-                    File aktif saat ini: 
-                    <span class="font-mono bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-gray-800 dark:text-gray-200">
-                        {{ $activeLogFile ?? 'tidak ada' }}
+                <p class="text-sm text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-4 gap-y-2">
+                    <span>
+                        File aktif: 
+                        <span class="font-mono bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-gray-800 dark:text-gray-200">
+                            {{ $activeLogFile ?? 'tidak ada' }}
+                        </span>
                     </span>
+                    @if($fileLastModified)
+                        <span>
+                            Terakhir diubah: 
+                            <span class="font-mono bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-gray-800 dark:text-gray-200">
+                                {{ $fileLastModified }}
+                            </span>
+                        </span>
+                    @endif
+                    @if($lastRefreshedAt)
+                        <span>
+                            Terakhir dimuat: 
+                            <span class="font-mono bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-gray-800 dark:text-gray-200">
+                                {{ $lastRefreshedAt }}
+                            </span>
+                        </span>
+                    @endif
                 </p>
             </div>
             <div class="flex gap-2">
