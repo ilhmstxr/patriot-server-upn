@@ -1,0 +1,226 @@
+Berikut adalah breakdown detail dan panduan eksekusi untuk setiap metode yang ada di **Poin 2 (Metode Injeksi Kode via Git)**. Karena Anda tidak memiliki akses SSH, metode ini memanfaatkan *pipeline* otomatis (*auto-deploy*) dari Git untuk memasukkan kode pelacak ke dalam VPS pusat.
+
+---
+
+## 2.A. Trik Route Pembuat Log Darurat (Expose Log via Web View)
+
+### Konsep Dasar
+
+Laravel menyimpan semua *error exception* di dalam file teks mentah mentah pada direktori `storage/logs/laravel.log`. Karena Anda tidak bisa membacanya via terminal (`tail -f`), kita membuat sebuah *endpoint* HTTP (URL baru) yang bertindak sebagai "jendela pembaca" untuk mengambil konten file tersebut dan merendernya ke browser dalam bentuk teks terformat (`<pre>`).
+
+### Langkah Percobaan & Implementasi
+
+1. Buka projek lokal Anda, lalu buka file **`routes/web.php`**.
+2. Tambahkan kode di bawah ini. *Disarankan untuk membungkusnya di dalam middleware `auth` agar log rahasia tidak bisa diintip orang luar:*
+
+```php
+use Illuminate\Support\Facades\File;
+
+// Opsi 1: Taruh di dalam grup admin (Sangat Direkomendasikan jika sistem auth admin masih jalan)
+Route::middleware(['auth', 'admin'])->group(function () {
+    Route::get('/pantau-error-vps', function () {
+        $logPath = storage_path('logs/laravel.log');
+        
+        if (!File::exists($logPath)) {
+            return response()->json(['message' => 'File log belum tercipta atau kosong.'], 404);
+        }
+
+        // Mengambil 50.000 karakter terakhir untuk mencegah browser hang jika file log berukuran GB
+        $fileData = File::get($logPath);
+        $chunk = substr($fileData, -50000);
+
+        // Render dengan tag <pre> agar format baris baru (\n) terbaca rapi di browser
+        return response('<pre>' . htmlspecialchars($chunk) . '</pre>');
+    });
+});
+
+// Opsi 2: Tanpa auth jika terdesak (Hapus setelah selesai digunakan demi keamanan!)
+Route::get('/pantau-error-vps-darurat', function () {
+    $logPath = storage_path('logs/laravel.log');
+    if (!File::exists($logPath)) return 'Log Kosong';
+    return response('<pre>' . htmlspecialchars(substr(File::get($logPath), -50000)) . '</pre>');
+});
+
+```
+
+3. Lakukan `git add`, `git commit -m "feat: add emergency log route"`, dan `git push`.
+4. Setelah *auto-deploy* selesai, jalankan ulang modul yang eror di browser, lalu buka URL: `[https://patriotmetric.upnjatim.ac.id/pantau-error-vps](https://patriotmetric.upnjatim.ac.id/pantau-error-vps)` (sesuaikan dengan rute opsi yang dipilih).
+
+---
+
+## 2.B. Mengubah Exception Handler (Intersepsi Respon AJAX)
+
+### Konsep Dasar
+
+Modul `submission-timelines` pada gambar terindikasi dieksekusi via AJAX/Fetch asynchronous. Secara default, jika terjadi eror 500 pada request AJAX di mode *production*, Laravel hanya akan mengembalikan halaman HTML eror standar atau respon kosong (yang akhirnya memicu *Provisional Headers* atau *Canceled request* di browser).
+
+Dengan mengubah *Exception Handler*, kita mencegat eror tersebut sebelum dikembalikan, lalu memaksa Laravel mengubah formatnya menjadi JSON yang berisi file, baris kode (*line*), dan tumpukan eror (*stack trace*) agar terbaca jelas di tab **Network -> Response**.
+
+### Langkah Percobaan & Implementasi
+
+#### Jika Menggunakan Laravel 9 atau 10:
+
+1. Buka file **`app/Exceptions/Handler.php`**.
+2. Cari atau buat method `render()`, lalu modifikasi kodenya menjadi seperti ini:
+
+```php
+use Throwable;
+
+public function render($request, Throwable $e)
+{
+    // Cek jika request meminta JSON atau dikirim via AJAX (seperti request modul timelines)
+    if ($request->expectsJson() || $request->ajax()) {
+        return response()->json([
+            'status'  => 'error',
+            'message' => $e->getMessage(),
+            'exception' => get_class($e),
+            'file'    => $e->getFile(),
+            'line'    => $e->getLine(),
+            'trace'   => explode("\n", $e->getTraceAsString()) // Dibuat array agar rapi di network tab
+        ], 500);
+    }
+
+    return parent::render($request, $e);
+}
+
+```
+
+#### Jika Menggunakan Laravel 11:
+
+1. Buka file **`bootstrap/app.php`**.
+2. Tambahkan interseptor pada bagian `withExceptions`:
+
+```php
+->withExceptions(function (Exceptions $exceptions) {
+    $exceptions->render(function (Throwable $e, $request) {
+        if ($request->expectsJson() || $request->ajax()) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'file'    => $e->getFile(),
+                'line'    => $e->getLine(),
+            ], 500);
+        }
+    });
+})
+
+```
+
+3. *Push* kode ke Git. Buka kembali halaman admin, buka Network Tab, picu eror pada modul tersebut, dan klik tab **Response**. Anda akan melihat detail baris kode mana yang rusak dalam format JSON.
+
+---
+
+## 2.C. Kirim Eror via Integrasi Pihak Ketiga (Log Dumper)
+
+### Konsep Dasar
+
+Jika sistem VPS memblokir *response* keluar sehingga browser tetap tidak menampilkan apa-apa, kita bisa memindahkan jalur log dari yang awalnya disimpan di dalam *local disk* VPS ke server eksternal melalui koneksi API (*Third-party logging*).
+
+### Percobaan 1: Menggunakan Webhook Discord / Slack (Paling Cepat)
+
+1. Buat sebuah server Discord atau Slack, lalu buat sebuah **Webhook URL** pada bagian integrasi channel.
+2. Di projek lokal Anda, buka **`config/logging.php`**.
+3. Cari *array* `channels` dan temukan konfigurasi `slack`. Masukkan URL Webhook Anda di sana:
+
+```php
+'slack' => [
+    'driver' => 'slack',
+    'url' => 'https://discord.com/api/webhooks/xxxxxx... (atau url slack)',
+    'username' => 'Laravel Log Bot',
+    'level' => 'error',
+],
+
+```
+
+4. Ubah default logging di `.env` lokal Anda (jika `.env` produksi mengambil dari konfigurasi dasar) atau ubah channel *stack* di `logging.php` agar menyertakan slack:
+
+```php
+'stack' => [
+    'driver' => 'stack',
+    'channels' => ['single', 'slack'], // Tambahkan 'slack' di sini
+    'ignore_exceptions' => false,
+],
+
+```
+
+5. *Push* ke Git. Ketika modul `submission-timelines` diakses dan mengalami eror, Laravel otomatis menembak API Discord/Slack dan memunculkan teks eror lengkap langsung di chat aplikasi Anda.
+
+### Percobaan 2: Menggunakan Package Open-Source Log Viewer
+
+1. Di terminal komputer lokal Anda, instal *package* log viewer populer:
+```bash
+composer require opcodesio/log-viewer
+
+```
+
+
+2. Secara default, package ini akan membuat *route* baru di `/log-viewer`.
+3. Komit dan *push* `composer.json`, `composer.lock`, dan kode terkait ke Git.
+4. Tunggu proses *deployment* selesai (pastikan proses *auto-deploy* Anda menjalankan perintah `composer install --no-dev` atau sesuai standar Anda di produksi).
+5. Akses `[https://patriotmetric.upnjatim.ac.id/log-viewer](https://patriotmetric.upnjatim.ac.id/log-viewer)` melalui browser untuk melihat visualisasi log yang sangat detail dan interaktif.
+
+Untuk skala produksi (*production env*), Laravel sebenarnya sudah menyediakan ekosistem bawaan (*first-party*) serta kompatibilitas penuh dengan berbagai *library* khusus yang didesain aman, tidak membocorkan data sensitif ke publik, dan tidak membebani performa server.
+
+Berikut adalah daftar fitur bawaan dan *library* resmi Laravel yang dirancang khusus untuk melakukan *tracing* eror langsung di level produksi:
+
+---
+
+## 1. Fitur Bawaan Laravel (First-Party Features)
+
+### A. Laravel Pulse (Rekomendasi Utama)
+
+Jika Anda menggunakan Laravel 11 (atau Laravel 10 terbaru), **Laravel Pulse** adalah fitur *first-party* gratis yang sangat kuat untuk memantau performa dan eror di produksi secara *real-time*.
+
+* **Cara Kerja:** Pulse merekam riwayat *request* yang lambat, query database yang bermasalah, serta *application exceptions* (eror 500) yang sering muncul.
+* **Kelebihan di Produksi:** Pulse didesain sangat ringan karena bisa menggunakan mode *storage buffering*. Selain itu, ia dilengkapi fitur proteksi via *Gate authorization*, sehingga hanya akun Admin Anda yang bisa membukanya.
+* **Cara Akses:** Setelah diinstal via Git, Anda cukup mengakses `https://patriotmetric.upnjatim.ac.id/pulse`.
+
+### B. Konfigurasi `Log Channels` (Monolog Stack)
+
+Laravel menggunakan *library* **Monolog** di balik layarnya. Di produksi, Anda bisa memecah log aplikasi ke berbagai kanal secara otomatis melalui file `config/logging.php`.
+
+* **Daily Driver:** Mengubah *channel* dari `single` ke `daily`. Laravel akan membuat file log terpisah setiap harinya (misal: `laravel-2026-07-03.log`). Ini mencegah ukuran file log membengkak menjadi bergiga-giga yang bisa membuat server *crash*.
+* **Papertrail / Syslog Driver:** Anda bisa mengarahkan log Laravel untuk dikirim ke *remote syslog server* pihak ketiga tanpa perlu menulis kode tambahan, cukup dengan memanfaatkan *driver* bawaan yang ada.
+
+---
+
+## 2. Library Resmi & Ekosistem Laravel (Ecosystem & Packages)
+
+### A. Laravel Telescope (Hanya dengan Proteksi Gate)
+
+Telescope adalah asisten *debugging* yang sangat detail untuk ekosistem Laravel. Ia merekam *requests, exceptions, log entries, database queries, queued jobs, mail*, hingga *cache operations*.
+
+* **Catatan Kritis untuk Produksi:** Secara default, Telescope merekam **semua hal**, yang bisa membuat database produksi Anda cepat penuh. Jika ingin digunakan di produksi, Anda **wajib**:
+1. Mengaktifkan *filter* di `App\Providers\TelescopeServiceProvider` agar hanya merekam eror berstatus *failed/exception*.
+2. Mengamankan `Telescope::auth` agar hanya email admin tertentu yang bisa mengakses halaman `/telescope`.
+
+
+
+### B. Bugsnag / Sentry (Laravel Integration Package)
+
+Ini adalah standar industri untuk *error tracking* tingkat produksi. Sentry dan Bugsnag menyediakan *package* resmi yang terintegrasi penuh dengan *Exception Handler* Laravel.
+
+* **Cara Kerja:** Setiap kali ada user yang menemui eror 500 (seperti pada modul `submission-timelines`), *package* ini akan langsung menangkap eror tersebut secara *silent* (di latar belakang) dan mengirimkan laporan lengkap ke *dashboard* cloud Sentry/Bugsnag Anda.
+* **Detail yang Didapat:** Anda akan mendapatkan laporan berupa baris kode yang eror, URL yang diakses, data *request*, hingga jenis browser dan sistem operasi yang digunakan user, tanpa mengganggu jalannya aplikasi.
+
+---
+
+## 3. Taktik Implementasi via Git (Tanpa SSH)
+
+Karena Anda mengandalkan *auto-deploy* Git, opsi **Laravel Pulse** atau **Sentry** adalah dua jalur terbaik yang bisa Anda pasang di lokal, lalu dilepas ke produksi.
+
+Sebagai langkah awal yang paling aman dan minim risiko *resource* server habis, Anda bisa menginstal **Laravel Pulse** dengan langkah berikut di lokal:
+
+1. Jalankan perintah: `composer require laravel/pulse`
+2. Publish file konfigurasinya: `php artisan pulse:install`
+3. Di file `app/Providers/AppServiceProvider.php`, pastikan aksesnya dibatasi (hanya user admin yang login yang bisa lihat):
+```php
+use Illuminate\Support\Facades\Gate;
+
+Gate::define('viewPulse', function ($user) {
+    return $user->is_admin; // Sesuaikan dengan logika otentikasi admin Anda
+});
+
+```
+
+
+4. Commit dan *push* ke Git. Setelah ter-deploy, jalankan ulang modul yang eror, lalu cek halaman `/pulse` untuk melihat ringkasan *exception* yang terjadi.
