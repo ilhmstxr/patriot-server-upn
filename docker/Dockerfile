@@ -1,4 +1,4 @@
-FROM php:8.3-fpm-alpine
+FROM php:8.4-fpm-alpine
 
 # Install system dependencies, PHP extensions, Nginx, and Supervisor
 RUN apk add --no-cache \
@@ -17,6 +17,8 @@ RUN apk add --no-cache \
     icu-dev \
     nginx \
     supervisor
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 # Install PHP Extensions (gd, pdo_mysql, intl, zip, exif, mbstring, bcmath, opcache, pcntl)
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \

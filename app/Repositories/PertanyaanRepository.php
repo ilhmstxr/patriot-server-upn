@@ -38,11 +38,16 @@ class PertanyaanRepository extends BaseRepository
 
     /**
      * Logic Pencocokan (Kondisi 2): Mencari opsi_jawaban berdasarkan value
-     * Alur: Cari opsi yang nilainya <= input, ambil yang paling mendekati (terbesar)
+     * Kolom `value` = BATAS ATAS bucket.
+     * Alur: ambil opsi dengan value TERKECIL yang >= input.
+     *       input <= 0  → opsi value NULL ("Tidak ada")
+     *       input > semua batas → fallback opsi value TERBESAR
+     * Catatan: pakai (float), bukan (int) — persentase < 1% (mis. 0.87) harus
+     * tetap masuk bucket, bukan dipotong jadi 0 lalu dianggap "Tidak ada".
      */
     public function findMatchingOpsiByValue($pertanyaanId, $inputValue)
     {
-        $input = (int) $inputValue;
+        $input = (float) $inputValue;
 
         if ($input <= 0) {
             return OpsiJawaban::where('pertanyaan_id', $pertanyaanId)

@@ -3,9 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      # --- ZERO-GAP FIX: BYPASS BUILD NETWORK ISOLATION ---
-      network: host
-      # ----------------------------------------------------
+    image: patriotmetric
     container_name: patriotmetric_local_prod
     restart: unless-stopped
     env_file:
@@ -26,6 +24,14 @@ services:
       start_period: 60s
     networks:
       - avablox-net
+
+  composer:
+    image: patriotmetric
+    profiles: [ "tools" ]
+    entrypoint: [ "composer" ]
+    working_dir: /var/www
+    volumes:
+      - .:/var/www
 
 volumes:
   app_storage:

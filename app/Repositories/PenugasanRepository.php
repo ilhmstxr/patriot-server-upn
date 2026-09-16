@@ -8,7 +8,6 @@ use App\Models\Institusi;
 use App\Models\Penugasan; // Gunakan PascalCase
 use App\Models\ResponPenugasan;
 use App\Models\Kategori;
-use App\Models\OpsiJawaban;
 use App\Models\Pertanyaan;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -67,36 +66,6 @@ class PenugasanRepository extends BaseRepository
             $payload
         );
     }
-    /**
-     * Logic Pencocokan (Kondisi 2): Mencari opsi_jawaban berdasarkan value
-     * Alur: Cari opsi yang nilainya <= input, ambil yang paling mendekati (terbesar)
-     */
-    public function findMatchingOpsiByValue($pertanyaanId, $inputValue)
-    {
-        $input = (int) $inputValue;
-
-        if ($input <= 0) {
-            return OpsiJawaban::where('pertanyaan_id', $pertanyaanId)
-                ->whereNull('value')
-                ->first();
-        }
-
-        $match = OpsiJawaban::where('pertanyaan_id', $pertanyaanId)
-            ->whereNotNull('value')
-            ->where('value', '>=', $input)
-            ->orderBy('value', 'asc')
-            ->first();
-
-        if (!$match) {
-            $match = OpsiJawaban::where('pertanyaan_id', $pertanyaanId)
-                ->whereNotNull('value')
-                ->orderBy('value', 'desc')
-                ->first();
-        }
-
-        return $match;
-    }
-
     /**
      * COUNT: Total jawaban valid (sudah diisi claim_value dan evidence_url)
      */
