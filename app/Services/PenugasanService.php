@@ -279,7 +279,11 @@ class PenugasanService extends BaseService
             return null;
         }
 
-        return round(((float) $rawInput / $pembagi) * 100, 2);
+        $persen = ((float) $rawInput / $pembagi) * 100;
+
+        // Input > 0 tidak boleh dibulatkan jadi 0,00 — kalau jadi 0, findMatchingOpsiByValue
+        // menganggapnya "Tidak ada" (skor 0), padahal seharusnya minimal skala 1.
+        return $persen > 0 ? max(round($persen, 2), 0.01) : 0.0;
     }
 
     // DONE

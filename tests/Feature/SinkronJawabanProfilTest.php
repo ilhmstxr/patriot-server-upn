@@ -83,6 +83,18 @@ class SinkronJawabanProfilTest extends TestCase
         $this->assertSame(3, (int) $jawaban->fresh()->skor_sistem);
     }
 
+    public function test_persen_di_bawah_0_01_tetap_skala_1(): void
+    {
+        [$penugasan, , , $jawaban] = $this->buatC7(40000);
+        $jawaban->update(['jawaban_teks' => ['raw_input' => 1, 'calculated_percentage' => null]]);
+
+        app(PenugasanService::class)->sinkronJawabanProfil($penugasan->id);
+
+        // 1 dari 40.000 mahasiswa = 0,0025% → tampil 0,01%, bukan 0,00% (yang berarti "Tidak ada")
+        $this->assertSame(0.01, (float) $jawaban->fresh()->jawaban_teks['calculated_percentage']);
+        $this->assertSame(1, (int) $jawaban->fresh()->skor_sistem);
+    }
+
     public function test_soal_otomatis_mengikuti_jml_ukm_profil(): void
     {
         $user = User::factory()->create();

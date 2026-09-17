@@ -495,11 +495,11 @@ class PertanyaanSeeder extends Seeder
                 'keterangan' => 'mahasiswa',
                 'opsi_jawaban' => [
                                     ['urutan' => 0, 'teks_jawaban' => 'Tidak ada', 'value' => '0'],
-                                    ['urutan' => 1, 'teks_jawaban' => '0 < x ≤ 0,25%', 'value' => '1'],
-                                    ['urutan' => 2, 'teks_jawaban' => '0,25% < x ≤ 0,5%', 'value' => '2'],
-                                    ['urutan' => 3, 'teks_jawaban' => '0,5% < x ≤ 0,75%', 'value' => '3'],
-                                    ['urutan' => 4, 'teks_jawaban' => '0,75% < x ≤ 1%', 'value' => '4'],
-                                    ['urutan' => 5, 'teks_jawaban' => '>1%', 'value' => '5'],
+                                    ['urutan' => 1, 'teks_jawaban' => '0 < x ≤ 0,25%', 'value' => '0.25'],
+                                    ['urutan' => 2, 'teks_jawaban' => '0,25% < x ≤ 0,5%', 'value' => '0.5'],
+                                    ['urutan' => 3, 'teks_jawaban' => '0,5% < x ≤ 0,75%', 'value' => '0.75'],
+                                    ['urutan' => 4, 'teks_jawaban' => '0,75% < x ≤ 1%', 'value' => '1'],
+                                    ['urutan' => 5, 'teks_jawaban' => '>1%', 'value' => '100'],
                                 ],
             ],
             [
@@ -563,7 +563,7 @@ class PertanyaanSeeder extends Seeder
                                     ['urutan' => 2, 'teks_jawaban' => '1% < x ≤ 2%', 'value' => '2'],
                                     ['urutan' => 3, 'teks_jawaban' => '2%< x ≤ 3%', 'value' => '3'],
                                     ['urutan' => 4, 'teks_jawaban' => '3% < x ≤ 4%', 'value' => '4'],
-                                    ['urutan' => 5, 'teks_jawaban' => '>4%', 'value' => '5'],
+                                    ['urutan' => 5, 'teks_jawaban' => '>4%', 'value' => '100'],
                                 ],
             ],
             [

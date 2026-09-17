@@ -437,8 +437,11 @@
 
             if (denom <= 0) return null;
 
+            const persen = (val / denom) * 100;
+
             return {
-                persen: ((val / denom) * 100).toFixed(2),
+                {{-- Nilai > 0 tampil minimal 0,01% — 0,00% terbaca seperti "Tidak ada" --}}
+                persen: (val > 0 ? Math.max(persen, 0.01) : 0).toFixed(2),
                 label: entry.label,
             };
         },
