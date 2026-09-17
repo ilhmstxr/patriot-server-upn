@@ -203,17 +203,8 @@
                 if (result.success) {
                     this.applyData(result.data);
 
-                    {{-- Ambil versi terbaru lalu simpan cache --}}
-                    let version = null;
-                    try {
-                        const v = await fetch('/api/penugasan/peserta/questions/version', {
-                            headers: { 'Authorization': 'Bearer ' + localStorage.getItem('auth_token'), 'Accept': 'application/json' }
-                        });
-                        const vr = await v.json();
-                        if (vr.success) version = vr.data.version;
-                    } catch (e) {}
-
-                    this.writeCache(result.data, version);
+                    {{-- Versi ikut di payload → data & versi selalu dari momen yang sama --}}
+                    this.writeCache(result.data, result.data.version);
                 }
             } catch (error) {
                 console.error('Gagal mengambil data pertanyaan:', error);
@@ -427,9 +418,9 @@
                 'B.7':  { varKey: 'jml_prodi',       label: 'total prodi' },
                 'B.18': { varKey: 'jml_ormawa',      varKey2: 'jml_ukm', label: 'total ormawa & UKM' },
                 'B.20': { varKey: 'jml_agama_aktif', label: 'jenis agama yang ada' },
-                'C.5':  { varKey: 'jml_mhs',         label: 'total mahasiswa' },
-                'C.7':  { varKey: 'jml_mhs',         label: 'total mahasiswa' },
-                'C.9':  { varKey: 'jml_mhs',         label: 'total mahasiswa' },
+                'C.5':  { varKey: 'jml_mahasiswa',   label: 'total mahasiswa' },
+                'C.7':  { varKey: 'jml_mahasiswa',   label: 'total mahasiswa' },
+                'C.9':  { varKey: 'jml_mahasiswa',   label: 'total mahasiswa' },
             };
 
             const entry = map[q.code];

@@ -119,12 +119,10 @@
                             if (response.ok && result.success) {
                                 this.successMessage = result.message;
 
-                                // Clear old session/storage to prevent intermittent data leaks
+                                // Reset cache bersih menyeluruh: sisa sesi/cache user sebelumnya
+                                // (profil, rubrik, hasil) tidak boleh terbawa ke akun yang baru login.
+                                localStorage.clear();
                                 sessionStorage.clear();
-                                localStorage.removeItem('auth_user');
-                                localStorage.removeItem('auth_token');
-                                localStorage.removeItem('token_expires_at');
-                                localStorage.removeItem('profile_data_cache');
 
                                 // Simpan token untuk API calls selanjutnya
                                 localStorage.setItem('auth_token', result.data.token);

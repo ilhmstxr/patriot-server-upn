@@ -209,9 +209,45 @@ class PenugasanRepository extends BaseRepository
             ->first();
     }
 
-    public function getLatestJawabanUpdate(int $penugasanId)
+    /**
+     * Baris jawaban peserta untuk fingerprint cache (lihat PenugasanService::getQuestionsVersion).
+     */
+    public function getJawabanVersionRows(int $penugasanId)
     {
-        return ResponPenugasan::where('penugasan_id', $penugasanId)->max('updated_at');
+        return ResponPenugasan::where('penugasan_id', $penugasanId)
+            ->orderBy('pertanyaan_id')
+            ->get([
+                'pertanyaan_id',
+                'jawaban_id',
+                'jawaban_teks',
+                'skor_sistem',
+                'skor_validasi_reviewer',
+                'note_reviewer',
+                'updated_at',
+            ])
+            ->toArray();
+    }
+
+    /**
+     * Jawaban penugasan untuk sekumpulan pertanyaan, di-key by pertanyaan_id
+     * (dipakai resync soal turunan profil).
+     */
+    public function getJawabanByPenugasan(int $penugasanId, array $pertanyaanIds)
+    {
+        return ResponPenugasan::where('penugasan_id', $penugasanId)
+            ->whereIn('pertanyaan_id', $pertanyaanIds)
+            ->get()
+            ->keyBy('pertanyaan_id');
+    }
+
+    /**
+     * Apakah sudah ada nilai dari reviewer? Kalau ya, data jawaban tidak boleh diubah otomatis.
+     */
+    public function adaNilaiReviewer(int $penugasanId): bool
+    {
+        return ResponPenugasan::where('penugasan_id', $penugasanId)
+            ->whereNotNull('skor_validasi_reviewer')
+            ->exists();
     }
 
     public function updateRekapSkor(int $penugasanId, array $rekap)

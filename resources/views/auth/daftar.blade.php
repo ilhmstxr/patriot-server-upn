@@ -167,6 +167,10 @@
                 if (response.ok && result.success) {
                     this.successMessage = result.message;
 
+                    // Reset cache bersih menyeluruh sebelum menyimpan sesi akun baru
+                    localStorage.clear();
+                    sessionStorage.clear();
+
                     // Simpan token, user, dan status ke localStorage
                     if (result.data && result.data.token) {
                         localStorage.setItem('auth_token', result.data.token);

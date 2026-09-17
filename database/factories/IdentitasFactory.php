@@ -24,7 +24,7 @@ class IdentitasFactory extends Factory
             'jml_tendik' => fake()->numberBetween(50, 1000),
             'jml_prodi' => fake()->numberBetween(10, 100),
             'jml_ukm' => fake()->numberBetween(5, 50),
-            'jml_agama' => fake()->numberBetween(1, 6),
+            // 'jml_agama' tidak ada di tabel identitas — jumlah penganut disimpan per baris di tabel `agama`
             'visi' => fake()->paragraph(),
             'misi' => fake()->paragraphs(3, true),
             'legal_documents' => [
@@ -32,7 +32,7 @@ class IdentitasFactory extends Factory
                 'aipt' => fake()->url(),
             ],
             'is_verified' => fake()->boolean(),
-            'admin_note' => fake()->optional()->sentence(),
+            // 'admin_note' juga belum ada di tabel identitas (dikomentari di migrasi)
         ];
     }
 }

@@ -25,4 +25,12 @@ class RubrikRepository extends BaseRepository
     {
         return Kategori::sum('bobot');
     }
+
+    /**
+     * Baris ringkas kategori untuk fingerprint cache (lihat PenugasanService::getQuestionsVersion).
+     */
+    public function getKategoriVersionRows()
+    {
+        return Kategori::orderBy('id')->get(['id', 'nama_kategori', 'deskripsi'])->toArray();
+    }
 }

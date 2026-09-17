@@ -92,13 +92,34 @@ class PertanyaanRepository extends BaseRepository
         // Sesuaikan jika ada pertanyaan yang tidak wajib (is_mandatory = false)
         return $this->model->count();
     }
-    public function getLatestPertanyaanUpdate()
-    {
-        return $this->model->max('updated_at');
-    }
 
     public function getAllCategoriesWithPertanyaans()
     {
         return \App\Models\Kategori::with('pertanyaans')->get();
+    }
+
+    /**
+     * Baris ringkas rubrik untuk fingerprint cache (lihat PenugasanService::getQuestionsVersion).
+     */
+    public function getVersionRows()
+    {
+        return $this->model->orderBy('id')
+            ->get(['id', 'category_id', 'kode_pertanyaan', 'teks_pertanyaan', 'tipe', 'kebutuhan_bukti'])
+            ->toArray();
+    }
+
+    public function getOpsiVersionRows()
+    {
+        return OpsiJawaban::orderBy('id')
+            ->get(['id', 'pertanyaan_id', 'opsi_jawaban', 'value', 'keterangan'])
+            ->toArray();
+    }
+
+    /**
+     * Pertanyaan berdasarkan kode (dipakai resync soal turunan profil).
+     */
+    public function getByKodes(array $kodes)
+    {
+        return $this->model->whereIn('kode_pertanyaan', $kodes)->get();
     }
 }

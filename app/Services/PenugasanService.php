@@ -19,21 +19,45 @@ class PenugasanService extends BaseService
 {
     protected $pertanyaanRepository;
     protected $timelineRepository;
+    protected $rubrikRepository;
 
     public function __construct(
         PenugasanRepository $PenugasanRepository,
         PertanyaanRepository $pertanyaanRepository,
-        \App\Repositories\TimelineRepository $timelineRepository
+        \App\Repositories\TimelineRepository $timelineRepository,
+        \App\Repositories\RubrikRepository $rubrikRepository
     ) {
         // Parent constructor mengikat PenugasanRepository sebagai repository utama
         parent::__construct($PenugasanRepository);
         $this->pertanyaanRepository = $pertanyaanRepository;
         $this->timelineRepository = $timelineRepository;
+        $this->rubrikRepository = $rubrikRepository;
     }
 
     const MODE_READ = 'read';
     const MODE_WRITE = 'write';
     const MODE_ANY = 'any';
+
+    /**
+     * Soal isian yang nilainya diturunkan dari profil institusi.
+     * calculated_percentage = raw_input / jumlah pembagi * 100.
+     * Ini satu-satunya sumber rumus — frontend hanya menampilkan preview-nya.
+     */
+    private const FORMULA_PROFIL = [
+        'B.6'  => ['jml_dosen'],
+        'B.7'  => ['jml_prodi'],
+        'B.18' => ['jml_ormawa', 'jml_ukm'], // pembagi = jumlah keduanya
+        'B.20' => ['jml_agama_aktif'],
+        'C.5'  => ['jml_mahasiswa'],
+        'C.7'  => ['jml_mahasiswa'],
+        'C.9'  => ['jml_mahasiswa'],
+    ];
+
+    /** Soal otomatis_sistem: nilainya diambil langsung dari profil, menggantikan input peserta. */
+    private const AUTO_PROFIL = ['C.6' => 'jml_ukm'];
+
+    /** Memo profil per penugasan supaya satu request tidak query identitas berulang kali. */
+    private array $profilCache = [];
 
     // DONE
     private function ensureUserIsActive($userId)
@@ -205,19 +229,25 @@ class PenugasanService extends BaseService
             'is_edit_enabled' => $isEditEnabled,
             'lock_reason'     => $lockReason,
             'questions'       => $questions,
-            'profil'          => $this->getProfilData($penugasan),
+            'profil'          => $this->getProfilData($penugasan->id),
+            // Versi ikut di payload ini supaya frontend menyimpan data + versi dari momen yang sama
+            'version'         => $this->getQuestionsVersion($penugasan)['version'],
         ];
     }
 
     /**
      * Mengambil data profil identitas peserta beserta jumlah agama aktif.
-     * Digunakan untuk kalkulasi formula preview di sisi frontend.
+     * Dipakai untuk preview formula di frontend dan untuk menghitung soal turunan profil.
      */
-    private function getProfilData($penugasan): array
+    private function getProfilData(int $penugasanId): array
     {
-        $identitas = $this->repository->getIdentitasWithAgama($penugasan->id);
+        if (isset($this->profilCache[$penugasanId])) {
+            return $this->profilCache[$penugasanId];
+        }
 
-        return [
+        $identitas = $this->repository->getIdentitasWithAgama($penugasanId);
+
+        return $this->profilCache[$penugasanId] = [
             'jml_mahasiswa' => $identitas?->jml_mahasiswa ?? 0,
             'jml_dosen' => $identitas?->jml_dosen ?? 0,
             'jml_tendik' => $identitas?->jml_tendik ?? 0,
@@ -230,6 +260,26 @@ class PenugasanService extends BaseService
                 ? $identitas->agamas->where('jumlah', '>', 0)->count()
                 : 0,
         ];
+    }
+
+    /**
+     * Persentase soal turunan profil. null kalau pembaginya belum terisi — sama seperti
+     * perilaku lama: tanpa persen, pencocokan bucket jatuh ke raw_input.
+     */
+    private function hitungPersenProfil(int $penugasanId, string $kode, $rawInput): ?float
+    {
+        $profil = $this->getProfilData($penugasanId);
+
+        $pembagi = 0.0;
+        foreach (self::FORMULA_PROFIL[$kode] ?? [] as $key) {
+            $pembagi += (float) ($profil[$key] ?? 0);
+        }
+
+        if ($pembagi <= 0 || $rawInput === null || $rawInput === '') {
+            return null;
+        }
+
+        return round(((float) $rawInput / $pembagi) * 100, 2);
     }
 
     // DONE
@@ -266,51 +316,164 @@ class PenugasanService extends BaseService
         $payload['note_reviewer'] = $dto->noteReviewer;
 
         // 5. Aturan skor: hanya dihitung saat jawaban DAN tautan bukti keduanya terisi.
-        //    Soal otomatis_sistem yang TIDAK punya kebutuhan_bukti dikecualikan.
-        //    B.13 & C.10 menyimpan struktur JSON tanpa raw_input — cek total_poin sebagai indikator terisi.
-        $jawabanTeksFilled = false;
-        if (isset($payload['jawaban_teks'])) {
-            $teks = $payload['jawaban_teks'];
-            if (is_array($teks)) {
-                if (isset($teks['total_poin'])) {
-                    $jawabanTeksFilled = true;
-                } else {
-                    $raw = $teks['raw_input'] ?? '';
-                    $jawabanTeksFilled = trim((string) $raw) !== '';
-                }
-            } else {
-                $jawabanTeksFilled = trim((string) $teks) !== '';
-            }
-        }
-        $hasJawaban = !empty($payload['jawaban_id']) || $jawabanTeksFilled;
-
-        $hasTautan = !empty($payload['tautan_bukti_drive']) && trim((string) $payload['tautan_bukti_drive']) !== '';
-        $isOtomatis = ($pertanyaan->tipe ?? null) === 'otomatis_sistem';
-        $needsBukti = !empty($pertanyaan->kebutuhan_bukti);
-        if ((!$isOtomatis || $needsBukti) && (!$hasJawaban || !$hasTautan)) {
-            $payload['skor_sistem'] = 0;
-        }
+        $payload['skor_sistem'] = $this->terapkanAturanSkorBukti($payload, $pertanyaan);
 
         // 6. Delegasi ke Repository (Upsert)
         return $this->repository->upsertJawaban($payload);
     }
 
     /**
-     * Mengembalikan token versi (timestamp ISO) untuk validasi cache rubrik di frontend.
+     * Aturan skor: skor hanya berlaku saat jawaban DAN tautan bukti keduanya terisi.
+     * Soal otomatis_sistem yang tidak punya kebutuhan_bukti dikecualikan.
+     * Dipakai jalur simpan (storeJawaban, saveDraftBatch) dan jalur baca (getHasilData)
+     * supaya keduanya tidak pernah berbeda aturan.
+     */
+    private function terapkanAturanSkorBukti(array $payload, $pertanyaan): int
+    {
+        // B.13 & C.10 menyimpan struktur JSON tanpa raw_input — total_poin jadi indikator terisi.
+        $teks = $payload['jawaban_teks'] ?? null;
+        $teksTerisi = false;
+        if ($teks !== null) {
+            if (is_array($teks)) {
+                $teksTerisi = isset($teks['total_poin']) || trim((string) ($teks['raw_input'] ?? '')) !== '';
+            } else {
+                $teksTerisi = trim((string) $teks) !== '';
+            }
+        }
+
+        $adaJawaban = !empty($payload['jawaban_id']) || $teksTerisi;
+        $adaTautan  = !empty($payload['tautan_bukti_drive']) && trim((string) $payload['tautan_bukti_drive']) !== '';
+        $dikecualikan = ($pertanyaan->tipe ?? null) === 'otomatis_sistem' && empty($pertanyaan->kebutuhan_bukti);
+
+        return (!$dikecualikan && (!$adaJawaban || !$adaTautan)) ? 0 : (int) ($payload['skor_sistem'] ?? 0);
+    }
+
+    /**
+     * Hitung ulang skor sistem dari jawaban yang sudah tersimpan memakai rubrik yang berlaku sekarang.
+     * Dipakai halaman hasil peserta supaya revisi ambang poin rubrik (opsi_jawaban.value) ikut
+     * terpakai tanpa mengubah data di DB.
+     */
+    private function skorSistemTersimpan($pertanyaan, ResponPenugasan $jawaban): int
+    {
+        return (int) ($this->payloadSyncTersimpan($pertanyaan, $jawaban)['skor_sistem'] ?? 0);
+    }
+
+    /**
+     * Jalankan ulang sinkronisasi atas jawaban yang sudah tersimpan, memakai jalur jawabanAutoSync
+     * yang sama dengan jalur simpan. Artinya: "seolah jawaban ini disimpan ulang hari ini" —
+     * termasuk rumus profil (calculated_percentage) dan soal otomatis.
+     * Dipakai jalur baca (getHasilData) dan resync setelah profil berubah.
+     *
+     * @return array{jawaban_id: mixed, jawaban_teks: mixed, skor_sistem: int}
+     */
+    private function payloadSyncTersimpan($pertanyaan, ResponPenugasan $jawaban): array
+    {
+        $teks = $jawaban->jawaban_teks;
+        if (is_array($teks)) {
+            // JawabanDTO::$jawabanTeks bertipe ?string, sedangkan kolomnya di-cast array
+            $teks = json_encode($teks);
+        }
+
+        $sync = $this->jawabanAutoSync(new JawabanDTO($jawaban->penugasan_id, [
+            'pertanyaan_id' => $jawaban->pertanyaan_id,
+            'jawaban_id'    => $jawaban->jawaban_id,
+            'jawaban_teks'  => $teks,
+            'tautan_bukti'  => $jawaban->tautan_bukti_drive,
+        ]), $pertanyaan);
+
+        $sync['skor_sistem'] = $this->terapkanAturanSkorBukti([
+            'jawaban_id'         => $sync['jawaban_id'] ?? null,
+            'jawaban_teks'       => $sync['jawaban_teks'] ?? $teks,
+            'tautan_bukti_drive' => $jawaban->tautan_bukti_drive,
+            'skor_sistem'        => $sync['skor_sistem'] ?? 0,
+        ], $pertanyaan);
+
+        return $sync;
+    }
+
+    /**
+     * Hitung ulang jawaban yang diturunkan dari profil setelah identitas/agama berubah.
+     * Dipanggil dari event Identitas/Agama (lihat AppServiceProvider) supaya semua jalur
+     * (profil peserta, verifikasi, panel admin) ikut tersinkron.
+     * ponytail: hanya menyentuh jawaban yang sudah ada; tautan bukti & note reviewer tidak diubah.
+     *
+     * @return int jumlah baris jawaban yang berubah
+     */
+    public function sinkronJawabanProfil(int $penugasanId): int
+    {
+        // Reviewer sudah pegang kendali → data tidak diubah di tengah penilaian.
+        if ($this->repository->adaNilaiReviewer($penugasanId)) {
+            return 0;
+        }
+
+        $kodes = array_merge(array_keys(self::FORMULA_PROFIL), array_keys(self::AUTO_PROFIL));
+        $pertanyaans = $this->pertanyaanRepository->getByKodes($kodes);
+        if ($pertanyaans->isEmpty()) {
+            return 0;
+        }
+
+        $jawabans = $this->repository->getJawabanByPenugasan($penugasanId, $pertanyaans->pluck('id')->all());
+        if ($jawabans->isEmpty()) {
+            return 0;
+        }
+
+        // Profil harus dibaca dari kondisi terbaru, bukan memo sebelum identitas diubah.
+        $this->profilCache = [];
+
+        $berubah = 0;
+        foreach ($pertanyaans as $pertanyaan) {
+            $jawaban = $jawabans->get($pertanyaan->id);
+            if (!$jawaban) {
+                continue;
+            }
+
+            $sync = $this->payloadSyncTersimpan($pertanyaan, $jawaban);
+            $lama = is_array($jawaban->jawaban_teks) ? $jawaban->jawaban_teks : [];
+            $baru = is_array($sync['jawaban_teks']) ? $sync['jawaban_teks'] : [];
+
+            // Tidak ada yang berubah → jangan sentuh updated_at (token versi cache rubrik ikut berubah).
+            if (($lama['raw_input'] ?? null) == ($baru['raw_input'] ?? null)
+                && ($lama['calculated_percentage'] ?? null) == ($baru['calculated_percentage'] ?? null)
+                && (int) $jawaban->jawaban_id === (int) $sync['jawaban_id']
+                && (int) $jawaban->skor_sistem === (int) $sync['skor_sistem']) {
+                continue;
+            }
+
+            $this->repository->upsertJawaban([
+                'penugasan_id'  => $penugasanId,
+                'pertanyaan_id' => $pertanyaan->id,
+                'jawaban_id'    => $sync['jawaban_id'],
+                'jawaban_teks'  => $sync['jawaban_teks'],
+                'skor_sistem'   => $sync['skor_sistem'],
+            ]);
+
+            $berubah++;
+        }
+
+        return $berubah;
+    }
+
+    /**
+     * Mengembalikan token versi untuk validasi cache rubrik di frontend.
      * Frontend melakukan stale-while-revalidate: jika versi sama, tidak perlu refetch full data.
+     *
+     * Token = fingerprint ISI rubrik, bukan updated_at. Revisi rubrik sering dilakukan lewat
+     * raw SQL / seeder yang tidak menyentuh updated_at — mis. migration
+     * *_fix_threshold_opsi_jawaban_rubrik.php yang mengubah opsi_jawaban.value lewat
+     * DB::table()->update(). Dengan fingerprint isi, perubahan ambang poin ikut terdeteksi.
      */
     public function getQuestionsVersion($penugasan): array
     {
-        $latestPertanyaan = $this->pertanyaanRepository->getLatestPertanyaanUpdate();
-        $latestJawaban = $this->repository->getLatestJawabanUpdate($penugasan->id);
-
-        $components = array_filter([$latestPertanyaan, $latestJawaban, $penugasan->updated_at]);
-        $version = $components ? max($components) : null;
+        $version = md5(json_encode([
+            'pertanyaan'   => $this->pertanyaanRepository->getVersionRows(),
+            'opsi_jawaban' => $this->pertanyaanRepository->getOpsiVersionRows(),
+            'kategori'     => $this->rubrikRepository->getKategoriVersionRows(),
+            'jawaban'      => $this->repository->getJawabanVersionRows($penugasan->id),
+            'status'       => $penugasan->status,
+        ]));
 
         return [
-            'version' => $version ? (string) $version : null,
-            'pertanyaan_updated_at' => $latestPertanyaan ? (string) $latestPertanyaan : null,
-            'jawaban_updated_at' => $latestJawaban ? (string) $latestJawaban : null,
+            'version' => $version,
             'penugasan_status' => $penugasan->status,
         ];
     }
@@ -374,14 +537,27 @@ class PenugasanService extends BaseService
 
             // 2. Normalisasi Struktur & Kalkulasi Skor
             $normalizedJawaban = [
-                'raw_input' => is_array($decodedJawaban) 
-                    ? ($decodedJawaban['raw_input'] ?? null) 
+                'raw_input' => is_array($decodedJawaban)
+                    ? ($decodedJawaban['raw_input'] ?? null)
                     : $decodedJawaban, // Jika isian tunggal (string murni), taruh di sini
-                    
-                'calculated_percentage' => is_array($decodedJawaban) 
-                    ? ($decodedJawaban['calculated_percentage'] ?? null) 
+
+                'calculated_percentage' => is_array($decodedJawaban)
+                    ? ($decodedJawaban['calculated_percentage'] ?? null)
                     : null,
             ];
+
+            // Soal turunan profil: server yang menghitung, nilai kiriman frontend ditimpa.
+            $kode = $pertanyaan->kode_pertanyaan ?? null;
+            if ($kode !== null && isset(self::AUTO_PROFIL[$kode])) {
+                $normalizedJawaban['raw_input'] = $this->getProfilData($dto->submissionId)[self::AUTO_PROFIL[$kode]] ?? null;
+                $normalizedJawaban['calculated_percentage'] = null;
+            } elseif ($kode !== null && isset(self::FORMULA_PROFIL[$kode])) {
+                $normalizedJawaban['calculated_percentage'] = $this->hitungPersenProfil(
+                    $dto->submissionId,
+                    $kode,
+                    $normalizedJawaban['raw_input']
+                );
+            }
 
             $data['jawaban_teks'] = $normalizedJawaban;
 
@@ -660,13 +836,17 @@ class PenugasanService extends BaseService
 
                 $displayScore = 0;
                 if ($answer) {
-                    // VALIDATING/FINALIZED/PUBLISHED: pakai skor reviewer jika ada, fallback ke skor sistem
-                    // Selain itu: selalu pakai skor sistem (draft)
-                    if ($showReviewerScores) {
-                        $displayScore = (int) ($answer->skor_validasi_reviewer ?? $answer->skor_sistem ?? 0);
-                    } else {
-                        $displayScore = (int) ($answer->skor_sistem ?? 0);
-                    }
+                    // Skor sistem dihitung ulang dari jawaban tersimpan memakai ambang rubrik yang
+                    // berlaku sekarang, bukan kolom skor_sistem yang mungkin hasil rubrik lama.
+                    $skorSistem = $this->skorSistemTersimpan($pertanyaan, $answer);
+
+                    // VALIDATING/FINALIZED/PUBLISHED: pakai skor reviewer (r1/r2/r3) jika ada, fallback ke skor sistem.
+                    // Selain itu: selalu pakai skor sistem (draft).
+                    // ponytail: ~1 query kecil per soal terjawab; pakai pertanyaans.OpsiJawaban
+                    // eager-load + match di PHP kalau halaman ini terasa berat.
+                    $displayScore = $showReviewerScores
+                        ? (int) ($answer->resolved_reviewer_score ?? $skorSistem)
+                        : $skorSistem;
                 }
                 $catData['score'] += $displayScore;
 
@@ -745,28 +925,7 @@ class PenugasanService extends BaseService
                 $payload['tautan_bukti_drive'] = $dto->tautanBukti;
 
                 // Aturan skor: hanya dihitung saat jawaban DAN tautan bukti keduanya terisi.
-                $jawabanTeksFilled = false;
-                if (isset($payload['jawaban_teks'])) {
-                    $teks = $payload['jawaban_teks'];
-                    if (is_array($teks)) {
-                        if (isset($teks['total_poin'])) {
-                            $jawabanTeksFilled = true;
-                        } else {
-                            $raw = $teks['raw_input'] ?? '';
-                            $jawabanTeksFilled = trim((string) $raw) !== '';
-                        }
-                    } else {
-                        $jawabanTeksFilled = trim((string) $teks) !== '';
-                    }
-                }
-                $hasJawaban = !empty($payload['jawaban_id']) || $jawabanTeksFilled;
-
-                $hasTautan = !empty($payload['tautan_bukti_drive']) && trim((string) $payload['tautan_bukti_drive']) !== '';
-                $isOtomatis = ($pertanyaan->tipe ?? null) === 'otomatis_sistem';
-                $needsBukti = !empty($pertanyaan->kebutuhan_bukti);
-                if ((!$isOtomatis || $needsBukti) && (!$hasJawaban || !$hasTautan)) {
-                    $payload['skor_sistem'] = 0;
-                }
+                $payload['skor_sistem'] = $this->terapkanAturanSkorBukti($payload, $pertanyaan);
 
                 $this->repository->upsertJawaban($payload);
             }

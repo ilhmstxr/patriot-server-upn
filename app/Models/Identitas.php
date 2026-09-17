@@ -19,12 +19,12 @@ class Identitas extends Model
         'jml_ukm',
         'jml_fakultas',
         'jml_ormawa',
-        'jml_agama',
+        // 'jml_agama' & 'admin_note' tidak ada di tabel identitas (lihat migrasi):
+        // penganut disimpan per baris di tabel `agama`, admin_note masih dikomentari.
         'visi',
         'misi',
         'legal_documents',
         'is_verified',
-        'admin_note',
     ];
 
     protected $casts = [

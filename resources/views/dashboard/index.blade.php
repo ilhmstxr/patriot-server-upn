@@ -176,6 +176,9 @@
                         }
                         this.profileData.agamas = { ...this.editForm.agamas };
                         localStorage.removeItem('profile_data_cache');
+                        // Rubrik ikut direset: angka profil (jml_mahasiswa, dll) dipakai
+                        // sebagai input hitungan rubrik, jadi cache rubrik lama harus dibuang.
+                        localStorage.removeItem('rubrik_questions_cache');
                         this.isEditMode = false;
                     } else {
                         this.saveProfileError = result.message || 'Gagal menyimpan perubahan.';
