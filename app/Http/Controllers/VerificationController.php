@@ -51,15 +51,67 @@ class VerificationController extends Controller
                 return $this->errorResponse('Data Penugasan tidak ditemukan. Silakan register terlebih dahulu.', 404);
             }
 
-            // Validate all inputs — max 5MB (5120 KB) per file
+            // Helper validator untuk berkas PDF (baik upload langsung maupun via path /temp)
+            $validatePdf = function ($attribute, $value, $fail) {
+                $label = ucwords(str_replace('_', ' ', $attribute));
+                if ($value instanceof \Illuminate\Http\UploadedFile) {
+                    if ($value->getSize() > 5120 * 1024) {
+                        $fail("Ukuran {$label} maksimal adalah 5MB.");
+                    }
+                    if (strtolower($value->getClientOriginalExtension()) !== 'pdf') {
+                        $fail("Format {$label} harus berupa dokumen PDF.");
+                    }
+                } elseif (is_string($value)) {
+                    $cleanPath = ltrim(preg_replace('#^/?storage/#', '', $value), '/');
+                    if (!Storage::disk('public')->exists($cleanPath)) {
+                        $fail("Berkas {$label} tidak ditemukan di server. Silakan unggah ulang.");
+                        return;
+                    }
+                    if (Storage::disk('public')->size($cleanPath) > 5120 * 1024) {
+                        $fail("Ukuran berkas {$label} melebihi batas maksimal 5MB.");
+                    }
+                    $ext = strtolower(pathinfo($cleanPath, PATHINFO_EXTENSION));
+                    if ($ext !== 'pdf') {
+                        $fail("Format {$label} harus berupa dokumen PDF.");
+                    }
+                }
+            };
+
+            // Helper validator untuk Logo (JPG, JPEG, PNG, WebP)
+            $validateLogo = function ($attribute, $value, $fail) {
+                $allowed = ['jpg', 'jpeg', 'png', 'webp'];
+                if ($value instanceof \Illuminate\Http\UploadedFile) {
+                    if ($value->getSize() > 5120 * 1024) {
+                        $fail('Ukuran Logo Instansi maksimal adalah 5MB.');
+                    }
+                    if (!in_array(strtolower($value->getClientOriginalExtension()), $allowed)) {
+                        $fail('Format Logo Instansi harus berupa JPG, JPEG, atau PNG.');
+                    }
+                } elseif (is_string($value)) {
+                    $cleanPath = ltrim(preg_replace('#^/?storage/#', '', $value), '/');
+                    if (!Storage::disk('public')->exists($cleanPath)) {
+                        $fail('Berkas Logo Instansi tidak ditemukan di server. Silakan unggah ulang.');
+                        return;
+                    }
+                    if (Storage::disk('public')->size($cleanPath) > 5120 * 1024) {
+                        $fail('Ukuran berkas Logo Instansi melebihi batas maksimal 5MB.');
+                    }
+                    $ext = strtolower(pathinfo($cleanPath, PATHINFO_EXTENSION));
+                    if (!in_array($ext, $allowed)) {
+                        $fail('Format Logo Instansi harus berupa JPG, JPEG, atau PNG.');
+                    }
+                }
+            };
+
+            // Validate all inputs — Menerima string path /temp dari uploadTemp maupun file fisik
             $validated = $request->validate([
                 // Files — Section 1: Dokumen Legal
-                'surat_pernyataan' => 'required|file|mimes:pdf|max:5120',
-                'sk_pendirian' => 'required|file|mimes:pdf|max:5120',
+                'surat_pernyataan' => ['required', $validatePdf],
+                'sk_pendirian' => ['required', $validatePdf],
                 // Files — Section 2: Berkas Profil
-                'profil_pt' => 'required|file|mimes:pdf|max:5120',
-                'logo_url' => 'required|file|mimes:jpeg,jpg,png|max:5120',
-                'struktur_organisasi' => 'required|file|mimes:pdf|max:5120',
+                'profil_pt' => ['required', $validatePdf],
+                'logo_url' => ['required', $validateLogo],
+                'struktur_organisasi' => ['required', $validatePdf],
                 // Data Institusi — Section 3
                 'nama_pt' => 'required|string|max:255',
                 'jenis_pt' => 'required|string|max:100',
@@ -84,13 +136,23 @@ class VerificationController extends Controller
                 'jabatan_pic' => 'required|string|max:255',
                 'no_hp_pic' => 'required|string|max:20',
                 'email_pic' => 'required|email|max:255',
+            ], [
+                'surat_pernyataan.required' => 'Surat Pernyataan wajib diunggah.',
+                'sk_pendirian.required' => 'SK Pendirian wajib diunggah.',
+                'profil_pt.required' => 'Profil Perguruan Tinggi wajib diunggah.',
+                'logo_url.required' => 'Logo Instansi wajib diunggah.',
+                'struktur_organisasi.required' => 'Struktur Organisasi wajib diunggah.',
             ]);
 
             // Create safe folder name for file storage
             $safeFolderName = Str::slug($validated['nama_pt']) . '-' . date('Y');
             $directoryPath = 'verifikasi/' . $safeFolderName;
 
-            // Upload all PDF files
+            if (!Storage::disk('public')->exists($directoryPath)) {
+                Storage::disk('public')->makeDirectory($directoryPath);
+            }
+
+            // Process all PDF files (dukung file upload langsung atau file temp yang dipindahkan)
             $files = [];
             $pdfFields = ['surat_pernyataan', 'sk_pendirian', 'profil_pt', 'struktur_organisasi'];
 
@@ -100,15 +162,52 @@ class VerificationController extends Controller
                     $safeFileName = time() . '_' . Str::slug(pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME)) . '.pdf';
                     $storedPath = $file->storeAs($directoryPath, $safeFileName, 'public');
                     $files[$field] = '/storage/' . $storedPath;
+                } elseif ($request->filled($field)) {
+                    $rawPath = $request->input($field);
+                    $cleanPath = ltrim(preg_replace('#^/?storage/#', '', $rawPath), '/');
+
+                    if (Storage::disk('public')->exists($cleanPath)) {
+                        // Jika file berada di folder temp, pindahkan ke folder permanen verifikasi
+                        // Storage::move memindahkan file fisik dan otomatis menghapusnya dari /temp
+                        if (str_starts_with($cleanPath, 'temp/')) {
+                            $targetFileName = time() . '_' . basename($cleanPath);
+                            $targetPath = $directoryPath . '/' . $targetFileName;
+                            Storage::disk('public')->move($cleanPath, $targetPath);
+                            $files[$field] = '/storage/' . $targetPath;
+                        } else {
+                            $files[$field] = '/storage/' . $cleanPath;
+                        }
+                    } else {
+                        $files[$field] = str_starts_with($rawPath, '/storage/') ? $rawPath : '/storage/' . $rawPath;
+                    }
                 }
             }
 
-            // Upload logo (image) and convert to WebP
+            // Upload & convert logo (dukung upload langsung atau dari folder temp)
             if ($request->hasFile('logo_url')) {
                 $files['logo_url'] = $this->logoUploadService->uploadAndConvert(
                     $request->file('logo_url'),
                     $directoryPath
                 );
+            } elseif ($request->filled('logo_url')) {
+                $rawPath = $request->input('logo_url');
+                $cleanPath = ltrim(preg_replace('#^/?storage/#', '', $rawPath), '/');
+
+                if (Storage::disk('public')->exists($cleanPath)) {
+                    if (str_starts_with($cleanPath, 'temp/')) {
+                        $fullSourcePath = storage_path('app/public/' . $cleanPath);
+                        $files['logo_url'] = $this->logoUploadService->convertFromPath(
+                            $fullSourcePath,
+                            $directoryPath
+                        );
+                        // Hapus file asli di folder temp setelah dikonversi ke WebP di folder tujuan
+                        Storage::disk('public')->delete($cleanPath);
+                    } else {
+                        $files['logo_url'] = '/storage/' . $cleanPath;
+                    }
+                } else {
+                    $files['logo_url'] = str_starts_with($rawPath, '/storage/') ? $rawPath : '/storage/' . $rawPath;
+                }
             }
 
 
@@ -167,6 +266,65 @@ class VerificationController extends Controller
             return $this->errorResponse('Validasi gagal.', 422, $e->errors());
         } catch (\Throwable $th) {
             return $this->errorResponse($th->getMessage(), 500);
+        }
+    }
+
+    /**
+     * POST /api/auth/verification/upload-temp
+     * Upload single file to temporary directory before final submission.
+     */
+    public function uploadTemp(Request $request)
+    {
+        try {
+            $userId = AuthController::getAuthPeserta();
+            if (!$userId) {
+                return $this->errorResponse('Sesi tidak valid. Silakan login kembali.', 401);
+            }
+
+            $request->validate([
+                'field' => 'required|string|in:surat_pernyataan,sk_pendirian,profil_pt,logo_url,struktur_organisasi',
+                'file' => 'required|file|max:5120',
+            ], [
+                'field.required' => 'Field berkas wajib ditentukan.',
+                'file.required' => 'File wajib diunggah.',
+                'file.max' => 'Ukuran berkas maksimal adalah 5MB.',
+                'file.uploaded' => 'Berkas gagal diunggah ke server. Pastikan ukuran file tidak melebihi batas upload server.',
+            ]);
+
+            $field = $request->input('field');
+            $file = $request->file('file');
+
+            // Format validation based on field
+            if ($field === 'logo_url') {
+                $request->validate([
+                    'file' => 'mimes:jpeg,jpg,png',
+                ], [
+                    'file.mimes' => 'Format logo harus berupa JPG, JPEG, atau PNG.',
+                ]);
+            } else {
+                $request->validate([
+                    'file' => 'mimes:pdf',
+                ], [
+                    'file.mimes' => 'Format berkas harus berupa dokumen PDF.',
+                ]);
+            }
+
+            $safeFileName = time() . '_' . Str::slug(pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME)) . '.' . $file->getClientOriginalExtension();
+            $tempDirectory = 'temp/' . $userId;
+
+            $storedPath = $file->storeAs($tempDirectory, $safeFileName, 'public');
+
+            return $this->successResponse([
+                'field' => $field,
+                'temp_path' => $storedPath,
+                'file_url' => '/storage/' . $storedPath,
+                'original_name' => $file->getClientOriginalName(),
+                'file_size' => $file->getSize(),
+            ], 'Berkas berhasil diunggah sementara.');
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->errorResponse('Validasi berkas gagal.', 422, $e->errors());
+        } catch (\Throwable $th) {
+            return $this->errorResponse('Gagal mengunggah berkas: ' . $th->getMessage(), 500);
         }
     }
 

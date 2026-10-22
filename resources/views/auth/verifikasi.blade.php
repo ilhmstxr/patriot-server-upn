@@ -59,7 +59,7 @@
         email_pic: ''
     },
     
-    // File Data (store File objects)
+    // File Data (store File objects or metadata)
     files: {
         surat_pernyataan: null,
         sk_pendirian: null,
@@ -75,6 +75,24 @@
         profil_pt: '',
         logo_url: '',
         struktur_organisasi: ''
+    },
+
+    // Temporary paths stored on the server (/storage/temp/...)
+    tempPaths: {
+        surat_pernyataan: '',
+        sk_pendirian: '',
+        profil_pt: '',
+        logo_url: '',
+        struktur_organisasi: ''
+    },
+
+    // Uploading indicator per field
+    uploading: {
+        surat_pernyataan: false,
+        sk_pendirian: false,
+        profil_pt: false,
+        logo_url: false,
+        struktur_organisasi: false
     },
 
     // --- IndexedDB Helper for Files ---
@@ -120,6 +138,20 @@
         tx.objectStore('files').clear();
     },
 
+    saveTempDraft() {
+        localStorage.setItem('verifikasi_temp_paths', JSON.stringify(this.tempPaths));
+        const meta = {};
+        for (const k in this.files) {
+            if (this.files[k]) {
+                meta[k] = {
+                    name: this.files[k].name,
+                    size: this.files[k].size,
+                };
+            }
+        }
+        localStorage.setItem('verifikasi_file_meta', JSON.stringify(meta));
+    },
+
     async init() {
         if (!localStorage.getItem('auth_token')) {
             window.location.href = '/masuk';
@@ -137,16 +169,37 @@
             } catch (e) { console.error('Failed to load draft', e); }
         }
 
+        // Restore temp paths from localStorage
+        const savedTempPaths = localStorage.getItem('verifikasi_temp_paths');
+        const savedFileMeta = localStorage.getItem('verifikasi_file_meta');
+        if (savedTempPaths) {
+            try {
+                const parsedTemp = JSON.parse(savedTempPaths);
+                Object.assign(this.tempPaths, parsedTemp);
+                if (savedFileMeta) {
+                    const parsedMeta = JSON.parse(savedFileMeta);
+                    for (const k in parsedMeta) {
+                        if (parsedMeta[k] && this.tempPaths[k]) {
+                            this.files[k] = parsedMeta[k];
+                            this.previews[k] = this.tempPaths[k] ? '/storage/' + this.tempPaths[k] : '';
+                        }
+                    }
+                }
+            } catch (e) { console.error('Failed to restore temp paths', e); }
+        }
+
         // Restore files from IndexedDB
         await this.initDB();
         for (const field in this.files) {
-            const file = await this.getFileFromDB(field);
-            if (file) {
-                this.files[field] = file;
-                if (file.type.startsWith('image/') || file.type === 'application/pdf') {
-                    this.previews[field] = URL.createObjectURL(file);
-                } else {
-                    this.previews[field] = file.name;
+            if (!this.files[field]) {
+                const file = await this.getFileFromDB(field);
+                if (file) {
+                    this.files[field] = file;
+                    if (file.type && (file.type.startsWith('image/') || file.type === 'application/pdf')) {
+                        this.previews[field] = URL.createObjectURL(file);
+                    } else if (file.name) {
+                        this.previews[field] = file.name;
+                    }
                 }
             }
         }
@@ -207,7 +260,7 @@
         }
     },
 
-    handleFileChange(event, field, accept) {
+    async handleFileChange(event, field, accept) {
         const file = event.target.files[0];
         if (!file) return;
 
@@ -248,22 +301,74 @@
             return;
         }
 
-        // Simpan object file
+        // Simpan object file lokal
         this.files[field] = file;
         this.saveFileToDB(field, file); // SAVE TO DRAFT
 
-        // Preview
+        // Preview lokal
         if (file.type.startsWith('image/') || file.type === 'application/pdf') {
             this.previews[field] = URL.createObjectURL(file);
         } else {
             this.previews[field] = file.name;
+        }
+
+        // --- REAL-TIME ASYNC UPLOAD TO /temp ---
+        this.uploading[field] = true;
+        this.tempPaths[field] = '';
+
+        const uploadData = new FormData();
+        uploadData.append('field', field);
+        uploadData.append('file', file);
+
+        try {
+            const uploadRes = await fetch('/api/auth/verification/upload-temp', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + localStorage.getItem('auth_token'),
+                    'Accept': 'application/json'
+                },
+                body: uploadData
+            });
+
+            const uploadJson = await uploadRes.json();
+            if (uploadRes.ok && uploadJson.success) {
+                this.tempPaths[field] = uploadJson.data.temp_path;
+                this.saveTempDraft();
+            } else {
+                let err = uploadJson.message || 'Gagal mengunggah berkas ke server.';
+                if (uploadJson.errors) err = Object.values(uploadJson.errors)[0][0];
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Unggah Gagal',
+                    text: err,
+                    confirmButtonColor: '#1b5e20'
+                });
+                this.removeFile(field);
+            }
+        } catch (e) {
+            console.error('Upload temp error:', e);
+            Swal.fire({
+                icon: 'error',
+                title: 'Gagal Mengunggah',
+                text: 'Koneksi ke server terputus saat mengunggah berkas. Silakan coba unggah kembali.',
+                confirmButtonColor: '#1b5e20'
+            });
+            this.removeFile(field);
+        } finally {
+            this.uploading[field] = false;
+            this.$nextTick(() => {
+                if (window.lucide) window.lucide.createIcons();
+            });
         }
     },
 
     removeFile(field) {
         this.files[field] = null;
         this.previews[field] = '';
-        this.removeFileFromDB(field); // REMOVE FROM DRAFT
+        this.tempPaths[field] = '';
+        this.uploading[field] = false;
+        this.saveTempDraft();
+        this.removeFileFromDB(field);
         if (this.$refs[field]) {
             this.$refs[field].value = '';
         }
@@ -273,15 +378,27 @@
         const requiredFiles = ['surat_pernyataan', 'sk_pendirian', 'profil_pt', 'logo_url', 'struktur_organisasi'];
         const requiredData = ['nama_pt', 'jenis_pt', 'visi', 'misi', 'jumlah_fakultas', 'jumlah_prodi', 'jumlah_dosen', 'jumlah_tendik', 'jumlah_mahasiswa', 'jumlah_ormawa', 'jumlah_ukm', 'nama_pic', 'jabatan_pic', 'no_hp_pic', 'email_pic'];
         
-        const filesComplete = requiredFiles.every(f => this.files[f] !== null);
+        const isAnyUploading = requiredFiles.some(f => this.uploading[f]);
+        const filesComplete = requiredFiles.every(f => (this.tempPaths[f] && this.tempPaths[f] !== '') || (this.files[f] instanceof File));
         const dataComplete = requiredData.every(d => this.formData[d] !== '' && this.formData[d] !== null && this.formData[d] !== undefined);
         
-        return filesComplete && dataComplete;
+        return !isAnyUploading && filesComplete && dataComplete;
     },
 
     async submitForm() {
         if (!this.isFormComplete) {
             this.errorMessage = 'Mohon lengkapi semua field dan file yang diwajibkan.';
+            return;
+        }
+
+        const requiredFiles = ['surat_pernyataan', 'sk_pendirian', 'profil_pt', 'logo_url', 'struktur_organisasi'];
+        if (requiredFiles.some(f => this.uploading[f])) {
+            Swal.fire({
+                icon: 'info',
+                title: 'Mohon Tunggu',
+                text: 'Masih ada berkas yang sedang dalam proses pengunggahan ke server.',
+                confirmButtonColor: '#1b5e20'
+            });
             return;
         }
 
@@ -295,9 +412,11 @@
             payload.append(key, this.formData[key]);
         }
         
-        // Append files
-        for (const key in this.files) {
-            if (this.files[key]) {
+        // Append files (kirim temp path yang sudah ada di server)
+        for (const key of requiredFiles) {
+            if (this.tempPaths[key]) {
+                payload.append(key, this.tempPaths[key]);
+            } else if (this.files[key] instanceof File) {
                 payload.append(key, this.files[key]);
             }
         }
@@ -325,6 +444,8 @@
                 // CLEAR DRAFT ON SUCCESS
                 localStorage.removeItem('verifikasi_draft');
                 localStorage.removeItem('verifikasi_section');
+                localStorage.removeItem('verifikasi_temp_paths');
+                localStorage.removeItem('verifikasi_file_meta');
                 localStorage.removeItem('profile_data_cache');
                 this.clearDB();
                 
@@ -505,7 +626,20 @@
                   oleh pimpinan perguruan tinggi sebagai bentuk konfirmasi keikutsertaan.</p>
 
                 <div class="mt-[4px] relative">
-                  <div x-show="!previews.surat_pernyataan"
+                  <!-- Loading State saat Upload ke /temp -->
+                  <div x-show="uploading.surat_pernyataan" style="display: none;"
+                    class="border border-emerald-300 bg-emerald-50/70 rounded-[12px] p-[16px] flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                      <div class="w-6 h-6 border-2 border-[#1b5e20] border-t-transparent rounded-full animate-spin shrink-0"></div>
+                      <div>
+                        <p class="text-[14px] font-semibold text-[#1b5e20]">Mengunggah berkas ke server...</p>
+                        <p class="text-[12px] text-[#64748b]" x-text="files.surat_pernyataan ? files.surat_pernyataan.name : ''"></p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Dropzone Upload -->
+                  <div x-show="!uploading.surat_pernyataan && !previews.surat_pernyataan"
                     class="border-2 border-dashed border-[#cbd5e1] rounded-[12px] p-[24px] hover:border-[#1b5e20] hover:bg-[#f8fafc] transition-all group flex flex-col items-center justify-center text-center cursor-pointer overflow-hidden bg-white relative">
                     <input type="file" accept=".pdf" x-ref="surat_pernyataan"
                       @change="handleFileChange($event, 'surat_pernyataan', '.pdf')"
@@ -515,21 +649,26 @@
                       <i data-lucide="upload" class="w-[24px] h-[24px] text-[#64748b] group-hover:text-[#1b5e20]"></i>
                     </div>
                     <p class="font-medium text-[#1d293d] text-[14px] mb-[4px]">Klik untuk mengunggah PDF</p>
-                    <p class="text-[#64748b] text-[12px]">Maks 5MB</p>
+                    <p class="text-[#64748b] text-[12px]">Maks 5MB (Otomatis diunggah)</p>
                   </div>
 
                   <!-- Preview PDF -->
-                  <div x-show="previews.surat_pernyataan" style="display: none;"
+                  <div x-show="!uploading.surat_pernyataan && previews.surat_pernyataan" style="display: none;"
                     class="border border-[#cbd5e1] rounded-[12px] p-[16px] bg-white flex items-center justify-between">
                     <div class="flex items-center gap-3 overflow-hidden">
                       <div class="bg-red-50 p-2 rounded-lg text-red-500 shrink-0">
                         <i data-lucide="file-text" class="w-6 h-6"></i>
                       </div>
                       <div class="truncate">
-                        <p class="text-[14px] font-semibold text-[#1d293d] truncate"
-                          x-text="files.surat_pernyataan ? files.surat_pernyataan.name : ''"></p>
+                        <div class="flex items-center gap-2">
+                          <p class="text-[14px] font-semibold text-[#1d293d] truncate"
+                            x-text="files.surat_pernyataan ? files.surat_pernyataan.name : ''"></p>
+                          <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">
+                            <i data-lucide="check" class="w-3 h-3"></i> Siap
+                          </span>
+                        </div>
                         <p class="text-[12px] text-[#64748b]"
-                          x-text="files.surat_pernyataan ? (files.surat_pernyataan.size / 1024 / 1024).toFixed(2) + ' MB' : ''">
+                          x-text="files.surat_pernyataan && files.surat_pernyataan.size ? (files.surat_pernyataan.size / 1024 / 1024).toFixed(2) + ' MB' : ''">
                         </p>
                       </div>
                     </div>
@@ -549,7 +688,20 @@
                   </label>
                 </div>
                 <div class="mt-[4px] relative">
-                  <div x-show="!previews.sk_pendirian"
+                  <!-- Loading State saat Upload ke /temp -->
+                  <div x-show="uploading.sk_pendirian" style="display: none;"
+                    class="border border-emerald-300 bg-emerald-50/70 rounded-[12px] p-[16px] flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                      <div class="w-6 h-6 border-2 border-[#1b5e20] border-t-transparent rounded-full animate-spin shrink-0"></div>
+                      <div>
+                        <p class="text-[14px] font-semibold text-[#1b5e20]">Mengunggah berkas ke server...</p>
+                        <p class="text-[12px] text-[#64748b]" x-text="files.sk_pendirian ? files.sk_pendirian.name : ''"></p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Dropzone Upload -->
+                  <div x-show="!uploading.sk_pendirian && !previews.sk_pendirian"
                     class="border-2 border-dashed border-[#cbd5e1] rounded-[12px] p-[24px] hover:border-[#1b5e20] hover:bg-[#f8fafc] transition-all group flex flex-col items-center justify-center text-center cursor-pointer overflow-hidden bg-white relative">
                     <input type="file" accept=".pdf" x-ref="sk_pendirian"
                       @change="handleFileChange($event, 'sk_pendirian', '.pdf')"
@@ -559,21 +711,26 @@
                       <i data-lucide="upload" class="w-[24px] h-[24px] text-[#64748b] group-hover:text-[#1b5e20]"></i>
                     </div>
                     <p class="font-medium text-[#1d293d] text-[14px] mb-[4px]">Klik untuk mengunggah PDF</p>
-                    <p class="text-[#64748b] text-[12px]">Maks 5MB</p>
+                    <p class="text-[#64748b] text-[12px]">Maks 5MB (Otomatis diunggah)</p>
                   </div>
 
                   <!-- Preview PDF -->
-                  <div x-show="previews.sk_pendirian" style="display: none;"
+                  <div x-show="!uploading.sk_pendirian && previews.sk_pendirian" style="display: none;"
                     class="border border-[#cbd5e1] rounded-[12px] p-[16px] bg-white flex items-center justify-between">
                     <div class="flex items-center gap-3 overflow-hidden">
                       <div class="bg-red-50 p-2 rounded-lg text-red-500 shrink-0">
                         <i data-lucide="file-text" class="w-6 h-6"></i>
                       </div>
                       <div class="truncate">
-                        <p class="text-[14px] font-semibold text-[#1d293d] truncate"
-                          x-text="files.sk_pendirian ? files.sk_pendirian.name : ''"></p>
+                        <div class="flex items-center gap-2">
+                          <p class="text-[14px] font-semibold text-[#1d293d] truncate"
+                            x-text="files.sk_pendirian ? files.sk_pendirian.name : ''"></p>
+                          <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">
+                            <i data-lucide="check" class="w-3 h-3"></i> Siap
+                          </span>
+                        </div>
                         <p class="text-[12px] text-[#64748b]"
-                          x-text="files.sk_pendirian ? (files.sk_pendirian.size / 1024 / 1024).toFixed(2) + ' MB' : ''">
+                          x-text="files.sk_pendirian && files.sk_pendirian.size ? (files.sk_pendirian.size / 1024 / 1024).toFixed(2) + ' MB' : ''">
                         </p>
                       </div>
                     </div>
@@ -611,7 +768,20 @@
                   </label>
                 </div>
                 <div class="mt-[4px] relative">
-                  <div x-show="!previews.profil_pt"
+                  <!-- Loading State saat Upload ke /temp -->
+                  <div x-show="uploading.profil_pt" style="display: none;"
+                    class="border border-emerald-300 bg-emerald-50/70 rounded-[12px] p-[16px] flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                      <div class="w-6 h-6 border-2 border-[#1b5e20] border-t-transparent rounded-full animate-spin shrink-0"></div>
+                      <div>
+                        <p class="text-[14px] font-semibold text-[#1b5e20]">Mengunggah profil perguruan tinggi ke server...</p>
+                        <p class="text-[12px] text-[#64748b]" x-text="files.profil_pt ? files.profil_pt.name : ''"></p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Dropzone Upload -->
+                  <div x-show="!uploading.profil_pt && !previews.profil_pt"
                     class="border-2 border-dashed border-[#cbd5e1] rounded-[12px] p-[24px] hover:border-[#1b5e20] hover:bg-[#f8fafc] transition-all group flex flex-col items-center justify-center text-center cursor-pointer overflow-hidden bg-white relative">
                     <input type="file" accept=".pdf" x-ref="profil_pt"
                       @change="handleFileChange($event, 'profil_pt', '.pdf')"
@@ -621,19 +791,26 @@
                       <i data-lucide="upload" class="w-[24px] h-[24px] text-[#64748b] group-hover:text-[#1b5e20]"></i>
                     </div>
                     <p class="font-medium text-[#1d293d] text-[14px] mb-[4px]">Klik untuk mengunggah PDF</p>
-                    <p class="text-[#64748b] text-[12px]">Maks 5MB</p>
+                    <p class="text-[#64748b] text-[12px]">Maks 5MB (Otomatis diunggah)</p>
                   </div>
-                  <div x-show="previews.profil_pt" style="display: none;"
+
+                  <!-- Preview PDF -->
+                  <div x-show="!uploading.profil_pt && previews.profil_pt" style="display: none;"
                     class="border border-[#cbd5e1] rounded-[12px] p-[16px] bg-white flex items-center justify-between">
                     <div class="flex items-center gap-3 overflow-hidden">
                       <div class="bg-red-50 p-2 rounded-lg text-red-500 shrink-0">
                         <i data-lucide="file-text" class="w-6 h-6"></i>
                       </div>
                       <div class="truncate">
-                        <p class="text-[14px] font-semibold text-[#1d293d] truncate"
-                          x-text="files.profil_pt ? files.profil_pt.name : ''"></p>
+                        <div class="flex items-center gap-2">
+                          <p class="text-[14px] font-semibold text-[#1d293d] truncate"
+                            x-text="files.profil_pt ? files.profil_pt.name : ''"></p>
+                          <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">
+                            <i data-lucide="check" class="w-3 h-3"></i> Siap
+                          </span>
+                        </div>
                         <p class="text-[12px] text-[#64748b]"
-                          x-text="files.profil_pt ? (files.profil_pt.size / 1024 / 1024).toFixed(2) + ' MB' : ''"></p>
+                          x-text="files.profil_pt && files.profil_pt.size ? (files.profil_pt.size / 1024 / 1024).toFixed(2) + ' MB' : ''"></p>
                       </div>
                     </div>
                     <button type="button" @click="removeFile('profil_pt')"
@@ -650,7 +827,20 @@
                   5. Logo Instansi <span class="text-red-500">*</span>
                 </label>
                 <div class="mt-[4px] relative">
-                  <div x-show="!previews.logo_url"
+                  <!-- Loading State saat Upload ke /temp -->
+                  <div x-show="uploading.logo_url" style="display: none;"
+                    class="border border-emerald-300 bg-emerald-50/70 rounded-[12px] p-[16px] flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                      <div class="w-6 h-6 border-2 border-[#1b5e20] border-t-transparent rounded-full animate-spin shrink-0"></div>
+                      <div>
+                        <p class="text-[14px] font-semibold text-[#1b5e20]">Mengunggah logo ke server...</p>
+                        <p class="text-[12px] text-[#64748b]" x-text="files.logo_url ? files.logo_url.name : ''"></p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Dropzone Upload -->
+                  <div x-show="!uploading.logo_url && !previews.logo_url"
                     class="border-2 border-dashed border-[#cbd5e1] rounded-[12px] p-[24px] hover:border-[#1b5e20] hover:bg-[#f8fafc] transition-all group flex flex-col items-center justify-center text-center cursor-pointer overflow-hidden bg-white relative">
                     <input type="file" accept="image/png, image/jpeg, image/jpg" x-ref="logo_url"
                       @change="handleFileChange($event, 'logo_url', '.png,.jpeg,.jpg')"
@@ -664,16 +854,21 @@
                   </div>
 
                   <!-- Preview Image -->
-                  <div x-show="previews.logo_url" style="display: none;"
+                  <div x-show="!uploading.logo_url && previews.logo_url" style="display: none;"
                     class="border border-[#cbd5e1] rounded-[12px] p-[16px] bg-white flex items-center justify-between">
                     <div class="flex items-center gap-4 overflow-hidden">
                       <img :src="previews.logo_url" alt="Preview Logo"
                         class="w-16 h-16 object-contain rounded-lg border border-[#e2e8f0] bg-[#f8fafc]" />
                       <div class="truncate">
-                        <p class="text-[14px] font-semibold text-[#1d293d] truncate"
-                          x-text="files.logo_url ? files.logo_url.name : ''"></p>
+                        <div class="flex items-center gap-2">
+                          <p class="text-[14px] font-semibold text-[#1d293d] truncate"
+                            x-text="files.logo_url ? files.logo_url.name : ''"></p>
+                          <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">
+                            <i data-lucide="check" class="w-3 h-3"></i> Siap
+                          </span>
+                        </div>
                         <p class="text-[12px] text-[#64748b]"
-                          x-text="files.logo_url ? (files.logo_url.size / 1024 / 1024).toFixed(2) + ' MB' : ''"></p>
+                          x-text="files.logo_url && files.logo_url.size ? (files.logo_url.size / 1024 / 1024).toFixed(2) + ' MB' : ''"></p>
                       </div>
                     </div>
                     <button type="button" @click="removeFile('logo_url')"
@@ -692,7 +887,20 @@
                   </label>
                 </div>
                 <div class="mt-[4px] relative">
-                  <div x-show="!previews.struktur_organisasi"
+                  <!-- Loading State saat Upload ke /temp -->
+                  <div x-show="uploading.struktur_organisasi" style="display: none;"
+                    class="border border-emerald-300 bg-emerald-50/70 rounded-[12px] p-[16px] flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                      <div class="w-6 h-6 border-2 border-[#1b5e20] border-t-transparent rounded-full animate-spin shrink-0"></div>
+                      <div>
+                        <p class="text-[14px] font-semibold text-[#1b5e20]">Mengunggah struktur organisasi ke server...</p>
+                        <p class="text-[12px] text-[#64748b]" x-text="files.struktur_organisasi ? files.struktur_organisasi.name : ''"></p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Dropzone Upload -->
+                  <div x-show="!uploading.struktur_organisasi && !previews.struktur_organisasi"
                     class="border-2 border-dashed border-[#cbd5e1] rounded-[12px] p-[24px] hover:border-[#1b5e20] hover:bg-[#f8fafc] transition-all group flex flex-col items-center justify-center text-center cursor-pointer overflow-hidden bg-white relative">
                     <input type="file" accept=".pdf" x-ref="struktur_organisasi"
                       @change="handleFileChange($event, 'struktur_organisasi', '.pdf')"
@@ -702,19 +910,26 @@
                       <i data-lucide="upload" class="w-[24px] h-[24px] text-[#64748b] group-hover:text-[#1b5e20]"></i>
                     </div>
                     <p class="font-medium text-[#1d293d] text-[14px] mb-[4px]">Klik untuk mengunggah PDF</p>
-                    <p class="text-[#64748b] text-[12px]">Maks 5MB</p>
+                    <p class="text-[#64748b] text-[12px]">Maks 5MB (Otomatis diunggah)</p>
                   </div>
-                  <div x-show="previews.struktur_organisasi" style="display: none;"
+
+                  <!-- Preview PDF -->
+                  <div x-show="!uploading.struktur_organisasi && previews.struktur_organisasi" style="display: none;"
                     class="border border-[#cbd5e1] rounded-[12px] p-[16px] bg-white flex items-center justify-between">
                     <div class="flex items-center gap-3 overflow-hidden">
                       <div class="bg-red-50 p-2 rounded-lg text-red-500 shrink-0">
                         <i data-lucide="file-text" class="w-6 h-6"></i>
                       </div>
                       <div class="truncate">
-                        <p class="text-[14px] font-semibold text-[#1d293d] truncate"
-                          x-text="files.struktur_organisasi ? files.struktur_organisasi.name : ''"></p>
+                        <div class="flex items-center gap-2">
+                          <p class="text-[14px] font-semibold text-[#1d293d] truncate"
+                            x-text="files.struktur_organisasi ? files.struktur_organisasi.name : ''"></p>
+                          <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">
+                            <i data-lucide="check" class="w-3 h-3"></i> Siap
+                          </span>
+                        </div>
                         <p class="text-[12px] text-[#64748b]"
-                          x-text="files.struktur_organisasi ? (files.struktur_organisasi.size / 1024 / 1024).toFixed(2) + ' MB' : ''">
+                          x-text="files.struktur_organisasi && files.struktur_organisasi.size ? (files.struktur_organisasi.size / 1024 / 1024).toFixed(2) + ' MB' : ''">
                         </p>
                       </div>
                     </div>
@@ -1120,12 +1335,12 @@
                       <p class="font-semibold text-[#1d293d]" x-text="label"></p>
                       <div
                         class="border border-[#e2e8f0] rounded-xl bg-white overflow-hidden h-[400px] flex flex-col relative group">
-                        <template x-if="previews[key] && previews[key].startsWith('blob:')">
+                        <template x-if="previews[key] && (previews[key].startsWith('blob:') || previews[key].includes('.pdf') || previews[key].startsWith('/storage/'))">
                           <iframe :src="previews[key] + '#toolbar=0&navpanes=0&scrollbar=0'"
                             class="w-full h-full border-none"></iframe>
                         </template>
-                        <template x-if="previews[key] && !previews[key].startsWith('blob:')">
-                          <!-- Fallback if not blob url -->
+                        <template x-if="previews[key] && !previews[key].startsWith('blob:') && !previews[key].includes('.pdf') && !previews[key].startsWith('/storage/')">
+                          <!-- Fallback if not previewable url -->
                           <div class="w-full h-full flex flex-col items-center justify-center bg-gray-50 text-gray-400">
                             <i data-lucide="file-text" class="w-12 h-12 mb-2 text-gray-300"></i>
                             <span class="text-sm font-medium" x-text="previews[key]"></span>
