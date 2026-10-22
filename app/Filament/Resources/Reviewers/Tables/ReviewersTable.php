@@ -28,7 +28,7 @@ class ReviewersTable
                 TextColumn::make('nama_pic')
                     ->label('Nama PIC')
                     ->searchable(),
-                SelectColumn::make('reviewer_id')
+                SelectColumn::make('reviewer_1_id')
                     ->label('Reviewer')
                     ->options(\App\Models\Reviewer::pluck('nama_lengkap', 'id'))
                     ->searchable()
