@@ -69,6 +69,11 @@ class User extends Authenticatable implements HasName, FilamentUser
         return $this->hasMany(Penugasan::class, 'user_id');
     }
 
+    public function reviewer()
+    {
+        return $this->hasOne(Reviewer::class, 'user_id');
+    }
+
     protected static function booted(): void
     {
         static::deleting(function (User $user) {

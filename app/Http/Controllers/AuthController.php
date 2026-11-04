@@ -165,8 +165,16 @@ class AuthController extends Controller
                 $redirectTo = '/reviewer';
             }
 
+            $userData = $user->toArray();
+            if (strtoupper($user->role) === 'REVIEWER') {
+                $reviewer = $user->reviewer;
+                if ($reviewer) {
+                    $userData['nama_lengkap'] = $reviewer->nama_lengkap;
+                }
+            }
+
             return $this->successResponse([
-                'user' => array_merge($user->toArray(), [
+                'user' => array_merge($userData, [
                     'nama_institusi' => $penugasan?->institusi?->nama_institusi
                 ]),
                 'token' => $result['token'],
@@ -306,12 +314,18 @@ class AuthController extends Controller
             $profileEditSetting = $this->cmsRepository->getByKey('is_peserta_profile_edit_enabled');
             $isProfileEditEnabled = $profileEditSetting ? filter_var($profileEditSetting->value, FILTER_VALIDATE_BOOLEAN) : true;
 
+            $reviewerNamaLengkap = null;
+            if (strtoupper($user->role) === 'REVIEWER') {
+                $reviewerNamaLengkap = $user->reviewer?->nama_lengkap;
+            }
+
             return $this->successResponse([
                 'user' => [
                     'id' => $user->id,
                     'email' => $user->email,
                     'role' => $user->role,
                     'status' => $user->status,
+                    'nama_lengkap' => $reviewerNamaLengkap,
                     'nama_institusi' => $penugasan?->institusi?->nama_institusi,
                 ],
                 'penugasan' => $penugasan ? [

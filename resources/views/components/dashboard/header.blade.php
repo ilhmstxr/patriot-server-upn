@@ -42,13 +42,14 @@
                                      is_reviewer: false
                                  };
                              } else if (role === 'reviewer') {
+                                 const reviewerName = user.nama_lengkap || user.name || 'Nama Reviewer';
                                  return {
-                                     nama_pic: user.name || 'Nama Reviewer',
+                                     nama_pic: reviewerName,
                                      nama_pt: 'Reviewer Patriot Metric',
-                                     avatar: (user.name || 'RV').substring(0, 2).toUpperCase(),
+                                     avatar: reviewerName.substring(0, 2).toUpperCase(),
                                      logo_url: null,
                                      is_reviewer: true
-                                 };q
+                                 };
                              }
                          }
                      } catch(e) {}
@@ -78,10 +79,11 @@
                             this.userData.logo_url = (p.institusi && p.institusi.logo_url_full) ? p.institusi.logo_url_full : null;
                             this.userData.is_reviewer = false;
                         } else {
-                           this.userData.nama_pic = user.name || 'Nama Reviewer';
+                           const reviewerName = user.nama_lengkap || user.name || 'Nama Reviewer';
+                           this.userData.nama_pic = reviewerName;
                            if (role === 'reviewer') {
                                this.userData.nama_pt = 'Reviewer Patriot Metric';
-                               this.userData.avatar = (user.name || 'RV').substring(0, 2).toUpperCase();
+                               this.userData.avatar = reviewerName.substring(0, 2).toUpperCase();
                                this.userData.logo_url = null;
                                this.userData.is_reviewer = true;
                            } else {
