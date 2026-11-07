@@ -61,7 +61,7 @@ class DatabaseSeeder extends Seeder
             // PengaturanCmsSeeder::class,
             ComproContentSeeder::class,
             BeritaSeeder::class,
-            SimulasiSeeder::class
+            // Si   mulasiSeeder::class
             // InstitusiSeeder::class,
             // PenugasanSeeder::class,
             // IdentitasSeeder::class,

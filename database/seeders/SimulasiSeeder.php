@@ -48,7 +48,7 @@ class SimulasiSeeder extends Seeder
         }
 
 
-            $pesertaUser = User::where('email', '23082010166@student.upnjatim.ac.id')->first();
+        $pesertaUser = User::where('email', '23082010166@student.upnjatim.ac.id')->first();
         if (!$pesertaUser) {
             $pesertaUser = User::create([
                 'email' => '23082010166@student.upnjatim.ac.id',

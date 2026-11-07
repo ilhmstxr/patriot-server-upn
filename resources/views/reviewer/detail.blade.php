@@ -15,6 +15,7 @@
         pesertaId: {{ $reqId }},
         
         // Data dari API
+        reviewerKey: null,
         Penugasan: {},
         institusi: {},
         profil_peserta: {},
@@ -84,18 +85,28 @@
         },
         
         openCategories: {},
+        get isReviewerEvaluating() {
+            // Jika halaman dibuka oleh reviewer yang ditugaskan (bukan admin readonly)
+            return !this.adminReadonly;
+        },
         get showReviewScore() {
-            return ['GRADED', 'VALIDATING', 'FINALIZED', 'PUBLISHED'].includes(this.Penugasan.status);
+            return this.isReviewerEvaluating || ['GRADED', 'VALIDATING', 'FINALIZED', 'PUBLISHED'].includes(this.Penugasan.status);
         },
         get hasilCategories() {
             return this.rubrikData.map(cat => {
                 let items = cat.pertanyaan.map(q => {
-                    // Estimasi = skor sistem dari jawaban peserta
-                    // Final = skor validasi reviewer (hanya tampil jika sudah GRADED/PUBLISHED)
-                    let sysScore = q.jawaban_peserta ? parseFloat(q.jawaban_peserta.skor_sistem || 0) : 0;
-                    let revScore = (q.jawaban_peserta && q.jawaban_peserta.skor_validasi_reviewer !== null)
+                    // Skor dari form penilaian reviewer lokal/tersimpan
+                    let localRevScore = (this.reviewerScores[q.id] !== undefined && this.reviewerScores[q.id] !== null && this.reviewerScores[q.id] !== '')
+                        ? parseInt(this.reviewerScores[q.id], 10)
+                        : null;
+                    let dbRevScore = (q.jawaban_peserta && q.jawaban_peserta.skor_validasi_reviewer !== null)
                         ? parseInt(q.jawaban_peserta.skor_validasi_reviewer, 10)
-                        : 0;
+                        : null;
+                    let revScore = localRevScore !== null ? localRevScore : (dbRevScore !== null ? dbRevScore : 0);
+                    let hasReviewerInput = localRevScore !== null || dbRevScore !== null;
+
+                    // Estimasi = skor sistem dari jawaban peserta
+                    let sysScore = q.jawaban_peserta ? parseFloat(q.jawaban_peserta.skor_sistem || 0) : 0;
                     
                     let jawabanText = this.answers[q.id] || 'Belum diisi';
                     try {
@@ -109,16 +120,20 @@
                         }
                     } catch(e) {}
 
+                    // Tampilkan revScore jika reviewer login / status sudah GRADED+, jika belum ada input fallback ke sysScore
+                    let displayScore = this.showReviewScore
+                        ? (hasReviewerInput ? Number(revScore) : Number(sysScore))
+                        : Number(sysScore);
+
                     return {
                         no: q.kode_pertanyaan,
                         title: q.teks_pertanyaan,
-                        // Tampilkan revScore jika sudah GRADED/PUBLISHED, otherwise sysScore
-                        score: this.showReviewScore ? Number(revScore) : Number(sysScore),
+                        score: displayScore,
                         max: 5,
                         jawaban: jawabanText,
                         tautan: this.links[q.id] || '',
                         catatan: this.reviewerNotes[q.id] || q.jawaban_peserta?.note_reviewer || '',
-                        is_validated: this.showReviewScore
+                        is_validated: this.showReviewScore && hasReviewerInput
                     };
                 });
                 let totalScore = items.reduce((sum, item) => sum + item.score, 0);
@@ -217,6 +232,7 @@
                     },
                     body: JSON.stringify({ scores, notes })
                 });
+                sessionStorage.removeItem('reviewer_detail_cache_v2_' + this.pesertaId);
                 this.saveStatus[questionId] = trimmedNote.length >= 20 ? 'saved' : '';
                 setTimeout(() => { if (this.saveStatus[questionId] === 'saved') this.saveStatus[questionId] = ''; }, 2000);
             } catch (e) {
@@ -248,6 +264,7 @@
                     },
                     body: JSON.stringify({ scores, notes })
                 });
+                sessionStorage.removeItem('reviewer_detail_cache_v2_' + this.pesertaId);
             } catch (e) {
                 console.error('Gagal menyimpan skor reviewer:', e);
             }
@@ -327,6 +344,7 @@
         },
 
         applyData(data) {
+            this.reviewerKey    = data.reviewer_key || null;
             this.Penugasan    = data.Penugasan    || {};
             this.institusi      = data.institusi      || {};
             this.profil_peserta = data.profil_peserta || {};
@@ -1007,11 +1025,11 @@
                                     </div>
                                 </template>
                                 <template x-if="showReviewScore">
-                                    <div class="flex items-center gap-2 bg-white/20 border border-white/30 rounded-lg px-3 py-2 mb-3 max-w-[280px]">
+                                    <div class="flex items-center gap-2 bg-white/20 border border-white/30 rounded-lg px-3 py-2 mb-3 max-w-[320px]">
                                         <svg class="w-3.5 h-3.5 text-white shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                                         </svg>
-                                        <p class="text-[11px] text-white/90 font-semibold">Nilai Final — Telah Divalidasi Reviewer</p>
+                                        <p class="text-[11px] text-white/90 font-semibold" x-text="isDone ? 'Nilai Final — Telah Divalidasi Reviewer' : 'Skor Sementara Hasil Penilaian Reviewer'"></p>
                                     </div>
                                 </template>
                                 <h2 class="text-white font-bold text-[22px] md:text-[28px] leading-tight tracking-tight">

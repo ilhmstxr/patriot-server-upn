@@ -769,6 +769,7 @@ class PenugasanService extends BaseService
         }
 
         return [
+            'reviewer_key' => $reviewerKey,
             'Penugasan' => [
                 'id' => $penugasan->id,
                 'status' => $penugasan->status,
@@ -1018,23 +1019,13 @@ class PenugasanService extends BaseService
         $answers = $this->repository->getAllAnswersByPenugasan($penugasan->id)
             ->keyBy('pertanyaan_id');
 
-        // Sum overall reviewer scores
+        // Hitung total capaian tertimbang per reviewer (R1, R2, R3) dalam skala 0 - 100
         $sumR1 = 0;
         $sumR2 = 0;
         $sumR3 = 0;
-        foreach ($answers as $answer) {
-            $scores = $answer->skor_validasi_reviewer;
-            if (is_array($scores)) {
-                $sumR1 += isset($scores['r1']) ? (float)$scores['r1'] : 0;
-                $sumR2 += isset($scores['r2']) ? (float)$scores['r2'] : 0;
-                $sumR3 += isset($scores['r3']) ? (float)$scores['r3'] : 0;
-            }
-        }
-        $penugasan->update([
-            'nilai_reviewer_1' => $sumR1,
-            'nilai_reviewer_2' => $sumR2,
-            'nilai_reviewer_3' => $sumR3,
-        ]);
+        $hasScoresR1 = false;
+        $hasScoresR2 = false;
+        $hasScoresR3 = false;
 
         $perKategori = [];
         $totalSkor = 0;
@@ -1044,13 +1035,38 @@ class PenugasanService extends BaseService
             $bobot = $this->getBobotKategori($cat->nama_kategori);
             $catSkor = 0;
             $catMax  = 0;
+            $catSkorR1 = 0;
+            $catSkorR2 = 0;
+            $catSkorR3 = 0;
 
             foreach ($cat->pertanyaans as $pertanyaan) {
                 $catMax += 5;
                 $answer = $answers->get($pertanyaan->id);
                 if ($answer) {
                     $catSkor += $answer->resolved_reviewer_score ?? $answer->skor_sistem ?? 0;
+
+                    $scores = $answer->skor_validasi_reviewer;
+                    if (is_array($scores)) {
+                        if (isset($scores['r1']) && $scores['r1'] !== null && $scores['r1'] !== '') {
+                            $catSkorR1 += (float)$scores['r1'];
+                            $hasScoresR1 = true;
+                        }
+                        if (isset($scores['r2']) && $scores['r2'] !== null && $scores['r2'] !== '') {
+                            $catSkorR2 += (float)$scores['r2'];
+                            $hasScoresR2 = true;
+                        }
+                        if (isset($scores['r3']) && $scores['r3'] !== null && $scores['r3'] !== '') {
+                            $catSkorR3 += (float)$scores['r3'];
+                            $hasScoresR3 = true;
+                        }
+                    }
                 }
+            }
+
+            if ($catMax > 0) {
+                $sumR1 += round(($catSkorR1 / $catMax) * $bobot, 2);
+                $sumR2 += round(($catSkorR2 / $catMax) * $bobot, 2);
+                $sumR3 += round(($catSkorR3 / $catMax) * $bobot, 2);
             }
 
             $totalSkor += $catSkor;
@@ -1069,6 +1085,12 @@ class PenugasanService extends BaseService
                 'persen_tertimbang' => $persenTertimbang,
             ];
         }
+
+        $penugasan->update([
+            'nilai_reviewer_1' => $hasScoresR1 ? min(100, round($sumR1, 2)) : 0,
+            'nilai_reviewer_2' => $hasScoresR2 ? min(100, round($sumR2, 2)) : 0,
+            'nilai_reviewer_3' => $hasScoresR3 ? min(100, round($sumR3, 2)) : 0,
+        ]);
 
         $totalPersen = $totalMax > 0 ? round(($totalSkor / $totalMax) * 100, 2) : 0;
 
