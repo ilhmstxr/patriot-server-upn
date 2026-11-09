@@ -49,8 +49,8 @@ class ReviewerController extends Controller
             }
             $reviewerId = $reviewer->id;
 
-            // Eksekusi Service
-            $result = $this->penugasanService->getAssignedReviews($reviewerId);
+            // Eksekusi Service (Kirim $user->id untuk pengecekan status aktif user)
+            $result = $this->penugasanService->getAssignedReviews($reviewerId, $user->id);
 
             return $this->successResponse($result, 'Daftar plottingan tugas berhasil diambil.', 200);
         } catch (\Throwable $e) {
@@ -72,8 +72,8 @@ class ReviewerController extends Controller
             }
             $reviewerId = $reviewer->id;
 
-            // Eksekusi Service
-            $result = $this->penugasanService->getDetailReviewTasks($reviewerId, (int) $pesertaId);
+            // Eksekusi Service (Kirim $user->id untuk pengecekan status aktif user)
+            $result = $this->penugasanService->getDetailReviewTasks($reviewerId, (int) $pesertaId, $user->id);
 
             return $this->successResponse($result, 'Daftar plottingan tugas berhasil diambil.', 200);
         } catch (\Throwable $e) {

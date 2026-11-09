@@ -586,10 +586,17 @@ class PenugasanService extends BaseService
         return $data; // WAJIB return agar bisa dipakai di storeJawaban
     }
 
-    public function getAssignedReviews(int $reviewerId)
+    public function getAssignedReviews(int $reviewerId, ?int $userId = null)
     {
-        // 1. Pastikan akun Reviewer masih aktif (menggunakan fungsi yang sudah ada)
-        $this->ensureUserIsActive($reviewerId);
+        // 1. Pastikan akun Reviewer masih aktif
+        if ($userId) {
+            $this->ensureUserIsActive($userId);
+        } else {
+            $reviewer = \App\Models\Reviewer::find($reviewerId);
+            if ($reviewer && $reviewer->user_id) {
+                $this->ensureUserIsActive($reviewer->user_id);
+            }
+        }
 
         // 2. Tarik data dari Repository
         $penugasans = $this->repository->getAssignedPenugasansByReviewer($reviewerId);
@@ -672,10 +679,17 @@ class PenugasanService extends BaseService
      * Mengambil detail profil peserta + rubrik + jawaban untuk reviewer
      * Hanya menampilkan jawaban ketika status SUBMITTED
      */
-    public function getDetailReviewTasks(int $reviewerId, int $pesertaId)
+    public function getDetailReviewTasks(int $reviewerId, int $pesertaId, ?int $userId = null)
     {
         // 1. Pastikan akun Reviewer masih aktif
-        $this->ensureUserIsActive($reviewerId);
+        if ($userId) {
+            $this->ensureUserIsActive($userId);
+        } else {
+            $reviewer = \App\Models\Reviewer::find($reviewerId);
+            if ($reviewer && $reviewer->user_id) {
+                $this->ensureUserIsActive($reviewer->user_id);
+            }
+        }
 
         // 2. Tarik data dari Repository (now includes jawabans with pertanyaan)
         $penugasan = $this->repository->getDetailPenugasanByReviewer($reviewerId, $pesertaId);
