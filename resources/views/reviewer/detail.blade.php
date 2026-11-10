@@ -804,7 +804,7 @@
                                                                 <template x-for="(opt, oIdx) in q.opsi_jawaban" :key="oIdx">
                                                                     <li class="leading-[18px] flex gap-[6px] items-start">
                                                                         <span class="shrink-0 mt-[2px] inline-flex items-center justify-center min-w-[44px] px-[6px] py-[1px] rounded-full text-[11px] font-bold bg-orange-100 text-orange-700"
-                                                                            x-text="(q.tipe === 'isian_singkat' ? Number(opt.opsi_jawaban) : Math.min(opt.value !== null && opt.value !== undefined ? Number(opt.value) : Number(opt.opsi_jawaban), 5)) + ' Poin'"></span>
+                                                                            x-text="(opt.opsi_jawaban !== null && opt.opsi_jawaban !== undefined && opt.opsi_jawaban !== '' ? opt.opsi_jawaban : (opt.value ?? 0)) + ' Poin'"></span>
                                                                         <span x-text="opt.keterangan || opt.opsi_jawaban || '-'"></span>
                                                                     </li>
                                                                 </template>
