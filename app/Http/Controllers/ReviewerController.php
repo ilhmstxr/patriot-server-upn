@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\SaveReviewerScoreJob;
 use App\Services\PenugasanService;
 use App\Traits\ApiResponse;
 use Illuminate\Http\Request;
@@ -121,9 +122,17 @@ class ReviewerController extends Controller
             $scores = $request->input('scores', []);
             $notes  = $request->input('notes', []);
 
-            $this->penugasanService->saveReviewerScores($penugasan, $reviewerKey, $scores, $notes);
+            // Dispatch ke antrean FIFO 'penilaian' agar tidak membebani koneksi MySQL
+            SaveReviewerScoreJob::dispatch(
+                (int) $penugasan->id,
+                $reviewerKey,
+                $scores,
+                $notes
+            )->onQueue('penilaian');
 
-            return $this->successResponse([], 'Skor berhasil disimpan dan rekap diperbarui.');
+            return $this->successResponse([
+                'queued' => true,
+            ], 'Skor berhasil dimasukkan ke antrean penyimpanan.');
         } catch (\Throwable $e) {
             return $this->errorResponse($e->getMessage(), $this->getErrorCode($e));
         }
@@ -163,6 +172,13 @@ class ReviewerController extends Controller
 
             if (!$reviewerKey) {
                 throw new \Exception("Akses ditolak: Anda tidak ditugaskan sebagai reviewer pada penugasan ini.", 403);
+            }
+
+            // Tunggu jika masih ada antrean penyimpanan yang sedang diproses untuk penugasan ini (max 3 detik)
+            $waitAttempts = 3;
+            while ($this->penugasanService->hasPendingReviewerJobs((int) $penugasan->id) && $waitAttempts > 0) {
+                sleep(1);
+                $waitAttempts--;
             }
 
             $this->penugasanService->finalizeReview($penugasan, $reviewerKey);

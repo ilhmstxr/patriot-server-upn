@@ -1173,6 +1173,23 @@ class PenugasanService extends BaseService
         });
     }
 
+    public function saveReviewerScoresFromQueue($penugasan, string $reviewerKey, array $scores, array $notes)
+    {
+        return $this->saveReviewerScores($penugasan, $reviewerKey, $scores, $notes);
+    }
+
+    public function hasPendingReviewerJobs(int $penugasanId): bool
+    {
+        try {
+            return DB::table('jobs')
+                ->where('queue', 'penilaian')
+                ->where('payload', 'like', '%"penugasanId":' . $penugasanId . '%')
+                ->exists();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
     public function countValidReviewerScoresForReviewer(int $penugasanId, string $reviewerKey): int
     {
         $answers = $this->repository->getAllAnswersByPenugasan($penugasanId);
