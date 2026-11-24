@@ -1033,10 +1033,11 @@ class PenugasanService extends BaseService
         $answers = $this->repository->getAllAnswersByPenugasan($penugasan->id)
             ->keyBy('pertanyaan_id');
 
-        // Hitung total capaian tertimbang per reviewer (R1, R2, R3) dalam skala 0 - 100
+        // Hitung total capaian tertimbang per reviewer (R1, R2, R3) dan sistem dalam skala 0 - 100
         $sumR1 = 0;
         $sumR2 = 0;
         $sumR3 = 0;
+        $sumSistem = 0;
         $hasScoresR1 = false;
         $hasScoresR2 = false;
         $hasScoresR3 = false;
@@ -1052,12 +1053,14 @@ class PenugasanService extends BaseService
             $catSkorR1 = 0;
             $catSkorR2 = 0;
             $catSkorR3 = 0;
+            $catSkorSistem = 0;
 
             foreach ($cat->pertanyaans as $pertanyaan) {
                 $catMax += 5;
                 $answer = $answers->get($pertanyaan->id);
                 if ($answer) {
                     $catSkor += $answer->resolved_reviewer_score ?? $answer->skor_sistem ?? 0;
+                    $catSkorSistem += (float) ($answer->skor_sistem ?? 0);
 
                     $scores = $answer->skor_validasi_reviewer;
                     if (is_array($scores)) {
@@ -1081,6 +1084,7 @@ class PenugasanService extends BaseService
                 $sumR1 += round(($catSkorR1 / $catMax) * $bobot, 2);
                 $sumR2 += round(($catSkorR2 / $catMax) * $bobot, 2);
                 $sumR3 += round(($catSkorR3 / $catMax) * $bobot, 2);
+                $sumSistem += round(($catSkorSistem / $catMax) * $bobot, 2);
             }
 
             $totalSkor += $catSkor;
@@ -1097,10 +1101,13 @@ class PenugasanService extends BaseService
                 'bobot'             => $bobot,
                 'persen_mentah'     => $persenMentah,
                 'persen_tertimbang' => $persenTertimbang,
+                'skor_sistem'       => $catSkorSistem,
+                'capaian_sistem'    => $catMax > 0 ? round(($catSkorSistem / $catMax) * $bobot, 2) : 0,
             ];
         }
 
         $penugasan->update([
+            'total_skor_sistem' => min(100, round($sumSistem, 2)),
             'nilai_reviewer_1' => $hasScoresR1 ? min(100, round($sumR1, 2)) : 0,
             'nilai_reviewer_2' => $hasScoresR2 ? min(100, round($sumR2, 2)) : 0,
             'nilai_reviewer_3' => $hasScoresR3 ? min(100, round($sumR3, 2)) : 0,
@@ -1249,5 +1256,195 @@ class PenugasanService extends BaseService
     public function assignReviewer(int|string $penugasanId, int|string $reviewerId): bool
     {
         return $this->repository->update($penugasanId, ['reviewer_1_id' => $reviewerId]);
+    }
+
+    /**
+     * Restart dan kalkulasi ulang seluruh skor:
+     * 1. Cek tabel respon_penugasans sebagai nilai asli per rubrik
+     * 2. Reset / hapus semua skor di tabel penugasans
+     * 3. Hitung ulang skor tiap jawaban memakai rumus rubrik & aturan bukti
+     * 4. Simpan kembali skor_sistem yang valid ke tabel respon_penugasans
+     * 5. Hitung rekap skor per kategori dengan pengalian bobot (A=20%, B=30%, C=50%) dan update ke tabel penugasans
+     */
+    public function restartAndRecalculateScores(?int $penugasanId = null, bool $dryRun = false): array
+    {
+        $query = \App\Models\Penugasan::with(['institusi']);
+        if ($penugasanId) {
+            $query->where('id', $penugasanId);
+        }
+        $penugasans = $query->get();
+
+        $allCategories = $this->pertanyaanRepository->getAllCategoriesWithPertanyaans();
+        $allPertanyaans = $this->pertanyaanRepository->getPertanyaanWithOpsiJawaban()->keyBy('id');
+
+        $results = [];
+
+        foreach ($penugasans as $penugasan) {
+            $answers = $this->repository->getAllAnswersByPenugasan($penugasan->id);
+            $totalJawabanDiubah = 0;
+            $totalJawaban = $answers->count();
+
+            // 1. Reset / hapus semua skor di tabel penugasans terlebih dahulu
+            if (!$dryRun) {
+                $penugasan->total_skor_sistem = 0;
+                $penugasan->total_skor_akhir = 0;
+                $penugasan->nilai_reviewer_1 = 0;
+                $penugasan->nilai_reviewer_2 = 0;
+                $penugasan->nilai_reviewer_3 = 0;
+                $penugasan->nilai_rata_rata = 0;
+                $penugasan->skor_rekap_json = null;
+                $penugasan->saveQuietly();
+            }
+
+            // 2. Cek & hitung ulang skor per jawaban dari respon_penugasans
+            foreach ($answers as $jawaban) {
+                $pertanyaan = $allPertanyaans->get($jawaban->pertanyaan_id);
+                if (!$pertanyaan) {
+                    continue;
+                }
+
+                // Kalkulasi ulang skor sistem berdasarkan opsi rubrik dan aturan kelengkapan bukti
+                $sync = $this->payloadSyncTersimpan($pertanyaan, $jawaban);
+                $skorBaru = (int) ($sync['skor_sistem'] ?? 0);
+                $jawabanIdBaru = $sync['jawaban_id'] ?? $jawaban->jawaban_id;
+                $skorLama = (int) ($jawaban->skor_sistem ?? 0);
+
+                if ($skorLama !== $skorBaru || (int) $jawaban->jawaban_id !== (int) $jawabanIdBaru) {
+                    $totalJawabanDiubah++;
+                }
+
+                if (!$dryRun) {
+                    $jawaban->skor_sistem = $skorBaru;
+                    $jawaban->jawaban_id = $jawabanIdBaru;
+                    if (isset($sync['jawaban_teks'])) {
+                        $jawaban->jawaban_teks = $sync['jawaban_teks'];
+                    }
+                    $jawaban->save();
+                }
+            }
+
+            // 3. Ambil jawaban terbaru & hitung pengalian bobot kategori (A=20%, B=30%, C=50%)
+            $freshAnswers = $this->repository->getAllAnswersByPenugasan($penugasan->id)->keyBy('pertanyaan_id');
+
+            $sumSistem = 0;
+            $sumR1 = 0;
+            $sumR2 = 0;
+            $sumR3 = 0;
+            $hasScoresR1 = false;
+            $hasScoresR2 = false;
+            $hasScoresR3 = false;
+            $perKategori = [];
+            $totalSkorSistemMentah = 0;
+            $totalMax = 0;
+
+            foreach ($allCategories as $cat) {
+                $bobot = $this->getBobotKategori($cat->nama_kategori);
+                $catMax = 0;
+                $catSkorSistem = 0;
+                $catSkorR1 = 0;
+                $catSkorR2 = 0;
+                $catSkorR3 = 0;
+
+                foreach ($cat->pertanyaans as $pertanyaan) {
+                    $catMax += 5;
+                    $ans = $freshAnswers->get($pertanyaan->id);
+                    if ($ans) {
+                        $skorSistem = (float) ($ans->skor_sistem ?? 0);
+                        $catSkorSistem += $skorSistem;
+
+                        $scores = $ans->skor_validasi_reviewer;
+                        if (is_array($scores)) {
+                            if (isset($scores['r1']) && $scores['r1'] !== null && $scores['r1'] !== '') {
+                                $catSkorR1 += (float) $scores['r1'];
+                                $hasScoresR1 = true;
+                            }
+                            if (isset($scores['r2']) && $scores['r2'] !== null && $scores['r2'] !== '') {
+                                $catSkorR2 += (float) $scores['r2'];
+                                $hasScoresR2 = true;
+                            }
+                            if (isset($scores['r3']) && $scores['r3'] !== null && $scores['r3'] !== '') {
+                                $catSkorR3 += (float) $scores['r3'];
+                                $hasScoresR3 = true;
+                            }
+                        }
+                    }
+                }
+
+                $capaianSistem = $catMax > 0 ? round(($catSkorSistem / $catMax) * $bobot, 2) : 0;
+                $sumSistem += $capaianSistem;
+
+                if ($catMax > 0) {
+                    $sumR1 += round(($catSkorR1 / $catMax) * $bobot, 2);
+                    $sumR2 += round(($catSkorR2 / $catMax) * $bobot, 2);
+                    $sumR3 += round(($catSkorR3 / $catMax) * $bobot, 2);
+                }
+
+                $totalSkorSistemMentah += $catSkorSistem;
+                $totalMax += $catMax;
+
+                $prefix = strtoupper(substr(trim($cat->nama_kategori), 0, 2));
+                $perKategori[$prefix] = [
+                    'nama'           => $cat->nama_kategori,
+                    'bobot'          => $bobot,
+                    'skor_mentah'    => $catSkorSistem,
+                    'max'            => $catMax,
+                    'capaian_skor'   => $capaianSistem,
+                ];
+            }
+
+            $totalSkorSistemAkhir = min(100, round($sumSistem, 2));
+            $nR1 = $hasScoresR1 ? min(100, round($sumR1, 2)) : 0;
+            $nR2 = $hasScoresR2 ? min(100, round($sumR2, 2)) : 0;
+            $nR3 = $hasScoresR3 ? min(100, round($sumR3, 2)) : 0;
+            $nRata = round(($nR1 + $nR2) / 2, 2);
+
+            // Tentukan total_skor_akhir (skor reviewer jika ada, jika belum dinilai gunakan skor sistem)
+            $skorAkhir = 0;
+            if ($nR3 > 0) {
+                $diff1 = abs($nR1 - $nR3);
+                $diff2 = abs($nR2 - $nR3);
+                $skorAkhir = ($diff2 < $diff1) ? $nR2 : $nR1;
+            } elseif ($hasScoresR1 || $hasScoresR2) {
+                $skorAkhir = $nRata;
+            } else {
+                $skorAkhir = $totalSkorSistemAkhir;
+            }
+
+            $rekap = [
+                'total_persen'      => $totalMax > 0 ? round(($totalSkorSistemMentah / $totalMax) * 100, 2) : 0,
+                'total_skor'        => $totalSkorSistemMentah,
+                'total_max'         => $totalMax,
+                'total_skor_sistem' => $totalSkorSistemAkhir,
+                'per_kategori'      => $perKategori,
+                'updated_at'        => now()->toIso8601String(),
+            ];
+
+            // 4. Update kembali ke tabel penugasans
+            if (!$dryRun) {
+                $penugasan->total_skor_sistem = $totalSkorSistemAkhir;
+                $penugasan->nilai_reviewer_1 = $nR1;
+                $penugasan->nilai_reviewer_2 = $nR2;
+                $penugasan->nilai_reviewer_3 = $nR3;
+                $penugasan->nilai_rata_rata = $nRata;
+                $penugasan->total_skor_akhir = $skorAkhir;
+                $penugasan->skor_rekap_json = $rekap;
+                $penugasan->saveQuietly();
+            }
+
+            $results[] = [
+                'penugasan_id'      => $penugasan->id,
+                'institusi'         => $penugasan->institusi?->nama_institusi ?? '-',
+                'total_jawaban'     => $totalJawaban,
+                'jawaban_diubah'    => $totalJawabanDiubah,
+                'total_skor_sistem' => $totalSkorSistemAkhir,
+                'nilai_reviewer_1'  => $nR1,
+                'nilai_reviewer_2'  => $nR2,
+                'nilai_reviewer_3'  => $nR3,
+                'total_skor_akhir'  => $skorAkhir,
+                'kategori'          => $perKategori,
+            ];
+        }
+
+        return $results;
     }
 }
