@@ -345,10 +345,14 @@ class PenugasanController extends Controller
     }
 
     /**
-     * Preview resume evaluasi laporan (A4 format Blade/PDF).
+     * Preview resume evaluasi laporan (A4 format Blade/PDF) — khusus admin.
      */
     public function previewResumePdf($id, \App\Services\ResumeReportService $reportService)
     {
+        if (!auth()->check() || strtoupper(auth()->user()->role ?? '') !== 'ADMIN') {
+            abort(403, 'Akses preview/export resume PDF hanya tersedia untuk admin.');
+        }
+
         $data = $reportService->generateReportData($id);
         return view('pdf.resume', $data);
     }

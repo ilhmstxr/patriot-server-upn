@@ -186,16 +186,18 @@
 </head>
 <body>
 
-    <!-- Print Button (Screen only) -->
-    <div class="no-print-toolbar">
-        <button class="btn-print" onclick="window.print()">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
-                <path d="M6 14h12v8H6z"/>
-            </svg>
-            Cetak / Simpan PDF
-        </button>
-    </div>
+    <!-- Print Button (Screen only, Admin only) -->
+    @if (auth()->check() && strtoupper(auth()->user()->role ?? '') === 'ADMIN')
+        <div class="no-print-toolbar">
+            <button class="btn-print" onclick="window.print()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
+                    <path d="M6 14h12v8H6z"/>
+                </svg>
+                Cetak / Simpan PDF
+            </button>
+        </div>
+    @endif
 
     <!-- ================= PAGE 1 ================= -->
     <div class="page" id="page-1">

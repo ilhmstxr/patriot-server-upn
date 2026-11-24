@@ -859,7 +859,7 @@
                             <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#ecfdf5] border border-[#a7f3d0] text-[#065f46] text-[12px] font-bold shadow-xs transition-all">
                                 <span class="w-2 h-2 rounded-full bg-[#10b981]"></span>
                                 <i data-lucide="cloud" class="w-3.5 h-3.5 text-[#059669]"></i>
-                                <span>Aman di Cloud</span>
+                                <span>Tersimpan</span>
                                 <span x-show="lastSaved" class="text-[10px] text-[#047857]/80 font-normal border-l border-[#a7f3d0] pl-2" x-text="'Pukul ' + lastSaved"></span>
                             </div>
                         </template>
@@ -878,8 +878,8 @@
                                 <span class="w-2 h-2 rounded-full bg-[#f59e0b] animate-ping"></span>
                                 <i data-lucide="cloud-off" class="w-3.5 h-3.5 text-[#d97706]"></i>
                                 <span>
-                                    <span x-text="pendingRetryCount"></span> nilai tertunda
-                                    <span x-show="retrySecondsLeft > 0" class="font-medium text-[#b45309]">(Sync dlm <span class="font-bold font-mono" x-text="retrySecondsLeft"></span>s)</span>
+                                    <span x-text="pendingRetryCount"></span> tertunda
+                                    <span x-show="retrySecondsLeft > 0" class="font-medium text-[#b45309]">(sinkronisasi dalam <span class="font-bold font-mono" x-text="retrySecondsLeft"></span>s)</span>
                                 </span>
                                 <button type="button" @click="executeBatchRetry()" class="ml-1 px-2.5 py-0.5 text-[11px] font-bold rounded-md bg-[#fef3c7] hover:bg-[#fde68a] text-[#78350f] border border-[#fcd34d] transition-colors cursor-pointer shadow-xs">
                                     Sync Sekarang

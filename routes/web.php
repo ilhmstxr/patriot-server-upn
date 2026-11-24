@@ -109,14 +109,14 @@ Route::prefix('reviewer')->group(function () {
     })->name('reviewer.peserta_detail');
 });
 
-// Admin penugasan detail (readonly reviewer view)
+// Admin penugasan detail (readonly reviewer view) & Resume PDF Export
 Route::middleware(['auth'])->group(function () {
     Route::get('/admin/penugasan-detail/{id}', function ($id) {
         return view('reviewer.detail', ['id' => $id, 'adminReadonly' => true]);
     })->name('admin.penugasan.detail');
 
     Route::get('/admin/api/penugasan/{id}', [PenugasanController::class, 'getAdminPenugasanDetail'])->name('admin.penugasan.api');
-});
 
-// Resume Laporan PDF Preview & Export
-Route::get('/penugasan/{id}/resume-pdf', [PenugasanController::class, 'previewResumePdf'])->name('penugasan.resume.pdf');
+    // Resume Laporan PDF Preview & Export (khusus admin)
+    Route::get('/penugasan/{id}/resume-pdf', [PenugasanController::class, 'previewResumePdf'])->name('penugasan.resume.pdf');
+});
