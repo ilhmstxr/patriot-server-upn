@@ -24,10 +24,11 @@ class SaveReviewerScoreJob implements ShouldQueue
 
     /**
      * The number of seconds to wait before retrying the job.
+     * Set to 30s to allow MySQL server/connection to recover without overload.
      *
      * @var int
      */
-    public int $backoff = 2;
+    public int $backoff = 30;
 
     public int $penugasanId;
     public string $reviewerKey;

@@ -1148,7 +1148,9 @@ class PenugasanService extends BaseService
 
                 if (array_key_exists($pertanyaanId, $scores)) {
                     $val = $scores[$pertanyaanId];
-                    $currentScores = $respon->skor_validasi_reviewer ?? ['r1' => null, 'r2' => null, 'r3' => null];
+                    $currentScores = is_array($respon->skor_validasi_reviewer)
+                        ? $respon->skor_validasi_reviewer
+                        : ['r1' => null, 'r2' => null, 'r3' => null];
                     
                     if ($val === null || $val === '') {
                         $currentScores[$reviewerKey] = null;
@@ -1161,7 +1163,9 @@ class PenugasanService extends BaseService
                 
                 if (array_key_exists($pertanyaanId, $notes)) {
                     $note = $notes[$pertanyaanId];
-                    $currentNotes = $respon->note_reviewer ?? ['r1' => null, 'r2' => null, 'r3' => null];
+                    $currentNotes = is_array($respon->note_reviewer)
+                        ? $respon->note_reviewer
+                        : ['r1' => null, 'r2' => null, 'r3' => null];
                     
                     if ($note === null || trim($note) === '') {
                         $currentNotes[$reviewerKey] = null;
@@ -1190,7 +1194,11 @@ class PenugasanService extends BaseService
         try {
             return DB::table('jobs')
                 ->where('queue', 'penilaian')
-                ->where('payload', 'like', '%"penugasanId":' . $penugasanId . '%')
+                ->where(function ($query) use ($penugasanId) {
+                    // Laravel DatabaseQueue menyimpan command sebagai PHP serialize di dalam JSON payload
+                    $query->where('payload', 'like', '%penugasanId\";i:' . $penugasanId . ';%')
+                        ->orWhere('payload', 'like', '%"penugasanId":' . $penugasanId . '%');
+                })
                 ->exists();
         } catch (\Throwable $e) {
             return false;

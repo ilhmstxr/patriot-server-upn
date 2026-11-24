@@ -117,3 +117,6 @@ Route::middleware(['auth'])->group(function () {
 
     Route::get('/admin/api/penugasan/{id}', [PenugasanController::class, 'getAdminPenugasanDetail'])->name('admin.penugasan.api');
 });
+
+// Resume Laporan PDF Preview & Export
+Route::get('/penugasan/{id}/resume-pdf', [PenugasanController::class, 'previewResumePdf'])->name('penugasan.resume.pdf');

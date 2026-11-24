@@ -343,5 +343,14 @@ class PenugasanController extends Controller
             'email_pic' => $penugasan->user->email ?? null,
         ]]);
     }
+
+    /**
+     * Preview resume evaluasi laporan (A4 format Blade/PDF).
+     */
+    public function previewResumePdf($id, \App\Services\ResumeReportService $reportService)
+    {
+        $data = $reportService->generateReportData($id);
+        return view('pdf.resume', $data);
+    }
 }
 

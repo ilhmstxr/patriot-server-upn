@@ -34,6 +34,249 @@
         reviewerNotes: {},
         unlockedQuestions: {},
 
+        // Antrean FIFO Penyimpanan Skor Reviewer (Client-Side)
+        saveQueue: [],
+        isProcessingSaveQueue: false,
+        pendingSaveCount: 0,
+
+        // Cloud Sync & 30-Second Auto-Retry State (In-Memory, Multi-Device Safe)
+        cloudStatus: 'synced', // 'synced' | 'pending' | 'syncing'
+        pendingRetryScores: {}, // { [qId]: score }
+        pendingRetryNotes: {},  // { [qId]: note }
+        retryTimer: null,
+        retrySecondsLeft: 0,
+        retryCountdownInterval: null,
+        retryAttempt: 0,
+        isRetrying: false,
+
+        get pendingRetryCount() {
+            return Object.keys(this.pendingRetryScores).length;
+        },
+
+        markRetryNeeded(questionId, score, note) {
+            if (this.adminReadonly || this.isDone) return;
+            this.pendingRetryScores[questionId] = score;
+            this.pendingRetryNotes[questionId] = note;
+            this.cloudStatus = 'pending';
+            this.scheduleSyncRetry(30);
+        },
+
+        unmarkRetry(questionId) {
+            delete this.pendingRetryScores[questionId];
+            delete this.pendingRetryNotes[questionId];
+            if (this.pendingRetryCount === 0) {
+                this.cloudStatus = 'synced';
+                this.clearRetryTimer();
+                this.retryAttempt = 0;
+            }
+        },
+
+        clearAllRetries() {
+            this.pendingRetryScores = {};
+            this.pendingRetryNotes = {};
+            this.cloudStatus = 'synced';
+            this.clearRetryTimer();
+            this.retryAttempt = 0;
+        },
+
+        clearRetryTimer() {
+            if (this.retryCountdownInterval) {
+                clearInterval(this.retryCountdownInterval);
+                this.retryCountdownInterval = null;
+            }
+            this.retrySecondsLeft = 0;
+        },
+
+        scheduleSyncRetry(baseSeconds = 30) {
+            if (this.adminReadonly || this.isDone) return;
+            // Jika countdown sudah berjalan dan masih ada waktu yang wajar, jangan ditimpa
+            if (this.retryCountdownInterval && this.retrySecondsLeft > 0) return;
+
+            this.clearRetryTimer();
+            const jitter = Math.floor(Math.random() * 5); // 0-4 detik acak untuk mencegah lonjakan request serentak
+            this.retrySecondsLeft = baseSeconds + jitter;
+
+            this.retryCountdownInterval = setInterval(() => {
+                this.retrySecondsLeft--;
+                if (this.retrySecondsLeft <= 0) {
+                    this.clearRetryTimer();
+                    this.executeBatchRetry();
+                }
+            }, 1000);
+        },
+
+        async executeBatchRetry() {
+            if (this.isRetrying || this.adminReadonly || this.isDone) return;
+            const qIds = Object.keys(this.pendingRetryScores);
+            if (qIds.length === 0) {
+                this.cloudStatus = 'synced';
+                this.clearRetryTimer();
+                return;
+            }
+
+            this.isRetrying = true;
+            this.cloudStatus = 'syncing';
+            this.clearRetryTimer();
+
+            const scoresBatch = { ...this.pendingRetryScores };
+            const notesBatch = { ...this.pendingRetryNotes };
+
+            try {
+                const res = await fetch(`/api/penugasan/reviewer/tasks/${this.pesertaId}/save-scores`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + localStorage.getItem('auth_token'),
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ scores: scoresBatch, notes: notesBatch })
+                });
+
+                if (!res.ok) {
+                    throw new Error('HTTP ' + res.status);
+                }
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.message || 'Gagal menyimpan batch nilai');
+                }
+
+                // Berhasil sync batch ke server!
+                for (const qId of Object.keys(scoresBatch)) {
+                    delete this.pendingRetryScores[qId];
+                    delete this.pendingRetryNotes[qId];
+                    if (this.saveStatus[qId] === 'pending_retry' || this.saveStatus[qId] === 'saving') {
+                        this.saveStatus[qId] = 'saved';
+                        setTimeout(() => { if (this.saveStatus[qId] === 'saved') this.saveStatus[qId] = ''; }, 2000);
+                    }
+                }
+
+                this.updateCache();
+                let d = new Date();
+                this.lastSaved = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+
+                if (this.pendingRetryCount === 0) {
+                    this.cloudStatus = 'synced';
+                    this.retryAttempt = 0;
+                } else {
+                    // Masih ada pertanyaan yang diedit saat batch request sedang berlangsung
+                    this.cloudStatus = 'pending';
+                    this.scheduleSyncRetry(30);
+                }
+            } catch (err) {
+                console.warn('Auto-retry batch sync gagal, menjadwalkan ulang dalam 30s:', err);
+                this.retryAttempt++;
+                this.cloudStatus = 'pending';
+                const nextDelay = Math.min(60, 30 + (this.retryAttempt * 5));
+                this.scheduleSyncRetry(nextDelay);
+            } finally {
+                this.isRetrying = false;
+                this.$nextTick(() => { if (window.lucide) window.lucide.createIcons(); });
+            }
+        },
+
+        getCacheKey() {
+            return (this.adminReadonly ? 'admin_detail_cache_v2_' : 'reviewer_detail_cache_v2_') + this.pesertaId;
+        },
+
+        getPendingEditsKey() {
+            return 'reviewer_pending_edits_v2_' + this.pesertaId;
+        },
+
+        loadPendingEdits() {
+            try {
+                const raw = sessionStorage.getItem(this.getPendingEditsKey());
+                return raw ? JSON.parse(raw) : {};
+            } catch (e) {
+                return {};
+            }
+        },
+
+        savePendingEdits(map) {
+            try {
+                if (Object.keys(map).length === 0) {
+                    sessionStorage.removeItem(this.getPendingEditsKey());
+                } else {
+                    sessionStorage.setItem(this.getPendingEditsKey(), JSON.stringify(map));
+                }
+            } catch (e) {}
+        },
+
+        markPendingEdit(questionId, score, note) {
+            if (this.adminReadonly || this.isDone) return;
+            const pending = this.loadPendingEdits();
+            pending[questionId] = {
+                score: (score !== null && score !== undefined && score !== '' && !isNaN(score)) ? parseInt(score, 10) : null,
+                note: note || '',
+                ts: Date.now()
+            };
+            this.savePendingEdits(pending);
+        },
+
+        enqueueSave(saveFn) {
+            this.pendingSaveCount++;
+            this.isSaving = true;
+            return new Promise((resolve, reject) => {
+                this.saveQueue.push({ saveFn, resolve, reject });
+                this.processSaveQueue();
+            });
+        },
+
+        async processSaveQueue() {
+            if (this.isProcessingSaveQueue) return;
+            this.isProcessingSaveQueue = true;
+            while (this.saveQueue.length > 0) {
+                const item = this.saveQueue.shift(); // FIFO: Ambil antrean terdepan terlebih dahulu
+                try {
+                    const res = await item.saveFn();
+                    item.resolve(res);
+                } catch (err) {
+                    item.reject(err);
+                } finally {
+                    this.pendingSaveCount = Math.max(0, this.pendingSaveCount - 1);
+                }
+            }
+            this.isProcessingSaveQueue = false;
+            this.isSaving = this.pendingSaveCount > 0;
+        },
+
+        // Sinkronisasi pembaruan cache sessionStorage agar konsisten & mutakhir
+        updateCache() {
+            const cacheKey = this.getCacheKey();
+            try {
+                const cachedRaw = sessionStorage.getItem(cacheKey);
+                if (cachedRaw) {
+                    const cached = JSON.parse(cachedRaw);
+                    if (cached && cached.rubrik) {
+                        cached.rubrik.forEach(cat => {
+                            cat.pertanyaan.forEach(q => {
+                                if (this.reviewerScores[q.id] !== undefined) {
+                                    if (!q.jawaban_peserta) q.jawaban_peserta = {};
+                                    const s = this.reviewerScores[q.id];
+                                    q.jawaban_peserta.skor_validasi_reviewer = (s !== null && s !== '' && !isNaN(s))
+                                        ? parseInt(s, 10)
+                                        : null;
+                                }
+                                if (this.reviewerNotes[q.id] !== undefined) {
+                                    if (!q.jawaban_peserta) q.jawaban_peserta = {};
+                                    q.jawaban_peserta.note_reviewer = this.reviewerNotes[q.id] || null;
+                                }
+                            });
+                        });
+                        sessionStorage.setItem(cacheKey, JSON.stringify(cached));
+                    }
+                }
+            } catch(e) {
+                console.warn('Gagal memperbarui cache sessionStorage:', e);
+            }
+        },
+
+        formatScore(val) {
+            const num = Number(val || 0);
+            if (!isFinite(num) || num === 0) return '0';
+            const rounded = Math.round(num * 100) / 100;
+            return Number.isInteger(rounded) ? String(rounded) : String(parseFloat(rounded.toFixed(2)));
+        },
+
         // Floating Drawer & Flags
         drawerOpen: false,
         flags: {},
@@ -65,23 +308,47 @@
             });
             this.drawerOpen = false;
         },
-        fillStatus(qId) {
+
+        // Cek apakah reviewer sudah mengisi skor untuk pertanyaan tertentu
+        hasReviewerScore(qId) {
             const score = this.reviewerScores[qId];
+            return score !== null && score !== undefined && score !== '' && !isNaN(score);
+        },
+
+        fillStatus(qId) {
+            const hasScore = this.hasReviewerScore(qId);
             const note  = this.reviewerNotes[qId];
-            const hasScore = (score !== null && score !== undefined && score !== '');
             const hasNote  = !!(note && String(note).trim() !== '');
-            if (hasScore) return 2;       // hijau: skor sudah diisi
+            if (hasScore) return 2;       // hijau: skor sudah diisi reviewer
             if (hasNote)  return 1;       // kuning: baru catatan, belum skor
             return 0;                     // kosong: belum ada apa-apa
         },
         get allQuestions() {
             return this.rubrikData.flatMap(c => c.pertanyaan);
         },
+        get totalQuestions() {
+            return this.allQuestions.length;
+        },
+        get totalScoredCount() {
+            return this.allQuestions.filter(q => this.hasReviewerScore(q.id)).length;
+        },
         get totalAnswered() {
-            return this.allQuestions.filter(q => this.fillStatus(q.id) === 2).length;
+            return this.totalScoredCount;
         },
         get totalFlagged() {
             return this.allQuestions.filter(q => this.isFlagged(q.id)).length;
+        },
+        get progressPercentage() {
+            return this.totalQuestions > 0 ? Math.round((this.totalScoredCount / this.totalQuestions) * 100) : 0;
+        },
+        get isNoneScored() {
+            return this.totalScoredCount === 0;
+        },
+        get isAllScored() {
+            return this.totalQuestions > 0 && this.totalScoredCount >= this.totalQuestions;
+        },
+        get isPartiallyScored() {
+            return this.totalScoredCount > 0 && !this.isAllScored;
         },
         
         openCategories: {},
@@ -95,18 +362,8 @@
         get hasilCategories() {
             return this.rubrikData.map(cat => {
                 let items = cat.pertanyaan.map(q => {
-                    // Skor dari form penilaian reviewer lokal/tersimpan
-                    let localRevScore = (this.reviewerScores[q.id] !== undefined && this.reviewerScores[q.id] !== null && this.reviewerScores[q.id] !== '')
-                        ? parseInt(this.reviewerScores[q.id], 10)
-                        : null;
-                    let dbRevScore = (q.jawaban_peserta && q.jawaban_peserta.skor_validasi_reviewer !== null)
-                        ? parseInt(q.jawaban_peserta.skor_validasi_reviewer, 10)
-                        : null;
-                    let revScore = localRevScore !== null ? localRevScore : (dbRevScore !== null ? dbRevScore : 0);
-                    let hasReviewerInput = localRevScore !== null || dbRevScore !== null;
-
-                    // Estimasi = skor sistem dari jawaban peserta
-                    let sysScore = q.jawaban_peserta ? parseFloat(q.jawaban_peserta.skor_sistem || 0) : 0;
+                    let hasScore = this.hasReviewerScore(q.id);
+                    let revScore = hasScore ? parseInt(this.reviewerScores[q.id], 10) : 0;
                     
                     let jawabanText = this.answers[q.id] || 'Belum diisi';
                     try {
@@ -120,26 +377,38 @@
                         }
                     } catch(e) {}
 
-                    // Tampilkan revScore jika reviewer login / status sudah GRADED+, jika belum ada input fallback ke sysScore
-                    let displayScore = this.showReviewScore
-                        ? (hasReviewerInput ? Number(revScore) : Number(sysScore))
-                        : Number(sysScore);
+                    // Di sisi reviewer: HANYA menampilkan skor yang diisi reviewer!
+                    // Jika reviewer belum mengisi pertanyaan ini, nilainya 0 / belum dinilai (TIDAK BOLEH fallback ke skor sistem peserta).
+                    let displayScore = hasScore ? Number(revScore) : 0;
 
                     return {
+                        id: q.id,
                         no: q.kode_pertanyaan,
                         title: q.teks_pertanyaan,
                         score: displayScore,
                         max: 5,
                         jawaban: jawabanText,
                         tautan: this.links[q.id] || '',
-                        catatan: this.reviewerNotes[q.id] || q.jawaban_peserta?.note_reviewer || '',
-                        is_validated: this.showReviewScore && hasReviewerInput
+                        catatan: this.reviewerNotes[q.id] || (q.jawaban_peserta?.note_reviewer || ''),
+                        has_score: hasScore,
+                        is_validated: hasScore
                     };
                 });
-                let totalScore = items.reduce((sum, item) => sum + item.score, 0);
-                let maxScore = items.length * 5;
+
+                let scoredItems = items.filter(item => item.has_score);
+                let scoredCount = scoredItems.length;
+                let totalItemsCount = items.length;
+                let isCategoryComplete = totalItemsCount > 0 && scoredCount >= totalItemsCount;
+                let isCategoryEmpty = scoredCount === 0;
+
+                // Total skor akumulasi reviewer di kategori ini
+                let totalScore = scoredItems.reduce((sum, item) => sum + item.score, 0);
+                let maxScore = totalItemsCount * 5;
                 let bobot = cat.bobot_persentase || 0;
-                let capaianSkor = maxScore > 0 ? (totalScore / maxScore) * bobot : 0;
+
+                // Perhitungan capaian skor per kategori langsung aktif real-time saat pengisian
+                // Rumus identik dengan backend PenugasanService::recapAndSaveSkor: round((totalScore / maxScore) * bobot, 2)
+                let capaianSkor = maxScore > 0 ? Math.round(((totalScore / maxScore) * bobot) * 100) / 100 : 0;
 
                 return {
                     name: cat.kategori,
@@ -147,6 +416,10 @@
                     max: maxScore,
                     bobot: bobot,
                     capaian_skor: capaianSkor,
+                    scored_count: scoredCount,
+                    total_count: totalItemsCount,
+                    is_complete: isCategoryComplete,
+                    is_empty: isCategoryEmpty,
                     items: items
                 };
             });
@@ -155,7 +428,9 @@
             return this.hasilCategories.reduce((sum, cat) => sum + cat.score, 0);
         },
         get hasilTotalCapaian() {
-            return this.hasilCategories.reduce((sum, cat) => sum + cat.capaian_skor, 0);
+            if (this.isNoneScored) return 0;
+            const total = this.hasilCategories.reduce((sum, cat) => sum + cat.capaian_skor, 0);
+            return Math.min(100, Math.round(total * 100) / 100);
         },
         get hasilTotalMax() {
             return this.hasilCategories.reduce((sum, cat) => sum + cat.max, 0);
@@ -178,13 +453,13 @@
                 const savedFlags = sessionStorage.getItem('reviewer_flags_' + this.pesertaId);
                 if (savedFlags) this.flags = JSON.parse(savedFlags);
             } catch(e) {}
-            const cacheKey = 'reviewer_detail_cache_v2_' + this.pesertaId;
+            const cacheKey = this.getCacheKey();
             try {
                 const cached = sessionStorage.getItem(cacheKey);
                 if (cached) {
                     this.applyData(JSON.parse(cached));
                     this.loading = false;
-                    this.fetchData(); // background refresh
+                    this.fetchData(); // background refresh (stale-while-revalidate)
                 } else {
                     await this.fetchData();
                 }
@@ -192,82 +467,121 @@
                 await this.fetchData();
             }
 
-            let timeout = null;
-            const autoSave = () => {
-                if (this.loading || this.isDone) return;
-                this.isSaving = true;
-                clearTimeout(timeout);
-                timeout = setTimeout(async () => {
-                    await this.saveScores();
-                    this.isSaving = false;
-                    let d = new Date();
-                    this.lastSaved = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-                }, 1000);
-            };
+            // Listeners untuk Multi-Device Resilient Sync & Tab Resumption
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && this.pendingRetryCount > 0) {
+                    this.clearRetryTimer();
+                    this.executeBatchRetry();
+                }
+            });
 
-            // No global $watch — save is triggered per question via @blur
+            window.addEventListener('online', () => {
+                if (this.pendingRetryCount > 0) {
+                    this.clearRetryTimer();
+                    this.executeBatchRetry();
+                }
+            });
+
+            window.addEventListener('beforeunload', (e) => {
+                if (this.pendingRetryCount > 0) {
+                    e.preventDefault();
+                    e.returnValue = '';
+                }
+            });
+
+            // No global $watch — save is triggered per question via @blur melalui antrean FIFO
         },
 
         async saveQuestionScore(questionId) {
             if (this.loading || this.isDone) return;
-            this.isSaving = true;
             this.saveStatus[questionId] = 'saving';
             const scores = {};
             const notes = {};
             const skor = this.reviewerScores[questionId];
             const note = this.reviewerNotes[questionId];
+            const hasValidScore = (skor !== null && skor !== undefined && skor !== '' && !isNaN(skor));
             
-            scores[questionId] = (skor !== null && skor !== undefined) ? skor : '';
+            scores[questionId] = hasValidScore ? parseInt(skor, 10) : '';
             // Hanya simpan catatan jika sudah memenuhi syarat minimal 20 karakter
             const trimmedNote = note ? note.trim() : '';
             notes[questionId] = trimmedNote.length >= 20 ? note : '';
 
-            try {
-                await fetch(`/api/penugasan/reviewer/tasks/${this.pesertaId}/save-scores`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + localStorage.getItem('auth_token'),
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    body: JSON.stringify({ scores, notes })
-                });
-                sessionStorage.removeItem('reviewer_detail_cache_v2_' + this.pesertaId);
-                this.saveStatus[questionId] = trimmedNote.length >= 20 ? 'saved' : '';
-                setTimeout(() => { if (this.saveStatus[questionId] === 'saved') this.saveStatus[questionId] = ''; }, 2000);
-            } catch (e) {
-                console.error('Gagal menyimpan skor:', e);
-                this.saveStatus[questionId] = '';
-            } finally {
-                this.isSaving = false;
-                let d = new Date();
-                this.lastSaved = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-            }
+            // Perbarui cache lokal & catat pending edit secara optimis agar aman saat refresh di tengah antrean FIFO
+            this.markPendingEdit(questionId, hasValidScore ? parseInt(skor, 10) : null, trimmedNote.length >= 20 ? note : '');
+            this.updateCache();
+
+            // Eksekusi penyimpanan dengan konsep antrean FIFO (First-In First-Out)
+            return this.enqueueSave(async () => {
+                try {
+                    const res = await fetch(`/api/penugasan/reviewer/tasks/${this.pesertaId}/save-scores`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + localStorage.getItem('auth_token'),
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        },
+                        body: JSON.stringify({ scores, notes })
+                    });
+                    if (!res.ok) {
+                        throw new Error('HTTP ' + res.status);
+                    }
+                    
+                    // Pertahankan & perbarui cache sessionStorage secara mutakhir
+                    this.updateCache();
+                    this.unmarkRetry(questionId);
+
+                    this.saveStatus[questionId] = (hasValidScore || trimmedNote.length >= 20) ? 'saved' : '';
+                    setTimeout(() => { if (this.saveStatus[questionId] === 'saved') this.saveStatus[questionId] = ''; }, 2000);
+                } catch (e) {
+                    console.error('Gagal menyimpan skor via FIFO queue, dijadwalkan sync ulang 30s:', e);
+                    this.saveStatus[questionId] = 'pending_retry';
+                    this.markRetryNeeded(questionId, hasValidScore ? parseInt(skor, 10) : '', trimmedNote.length >= 20 ? note : '');
+                } finally {
+                    let d = new Date();
+                    this.lastSaved = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+                }
+            });
         },
 
         async saveScores() {
             const scores = {};
             const notes  = {};
             for (const [qId, skor] of Object.entries(this.reviewerScores)) {
-                scores[qId] = (skor !== null && skor !== undefined) ? skor : '';
+                scores[qId] = (skor !== null && skor !== undefined && skor !== '' && !isNaN(skor)) ? parseInt(skor, 10) : '';
             }
             for (const [qId, note] of Object.entries(this.reviewerNotes)) {
                 notes[qId] = note || '';
             }
-            try {
-                await fetch(`/api/penugasan/reviewer/tasks/${this.pesertaId}/save-scores`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + localStorage.getItem('auth_token'),
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    body: JSON.stringify({ scores, notes })
-                });
-                sessionStorage.removeItem('reviewer_detail_cache_v2_' + this.pesertaId);
-            } catch (e) {
-                console.error('Gagal menyimpan skor reviewer:', e);
-            }
+            this.updateCache();
+            // Eksekusi penyimpanan dengan konsep antrean FIFO
+            return this.enqueueSave(async () => {
+                try {
+                    const res = await fetch(`/api/penugasan/reviewer/tasks/${this.pesertaId}/save-scores`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + localStorage.getItem('auth_token'),
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        },
+                        body: JSON.stringify({ scores, notes })
+                    });
+                    if (!res.ok) {
+                        throw new Error('HTTP ' + res.status);
+                    }
+                    // Pertahankan & perbarui cache sessionStorage
+                    this.updateCache();
+                    this.clearAllRetries();
+                } catch (e) {
+                    console.error('Gagal menyimpan semua skor reviewer via FIFO queue, dijadwalkan retry 30s:', e);
+                    for (const [qId, skor] of Object.entries(this.reviewerScores)) {
+                        const sVal = (skor !== null && skor !== undefined && skor !== '' && !isNaN(skor)) ? parseInt(skor, 10) : '';
+                        const nVal = this.reviewerNotes[qId] || '';
+                        if (sVal !== '' || (nVal && nVal.trim().length >= 20)) {
+                            this.markRetryNeeded(qId, sVal, nVal);
+                        }
+                    }
+                }
+            });
         },
 
         get submissionStatus() {
@@ -316,6 +630,12 @@
             this.isLocking = true;
             this.showLockConfirm = false;
             try {
+                if (this.pendingRetryCount > 0) {
+                    await this.executeBatchRetry();
+                    if (this.pendingRetryCount > 0) {
+                        throw new Error('Tidak dapat memfinalisasi: masih ada ' + this.pendingRetryCount + ' nilai yang belum tersinkron ke server. Mohon periksa koneksi internet Anda.');
+                    }
+                }
                 await this.saveScores();
                 const res = await fetch(`/api/penugasan/reviewer/tasks/${this.pesertaId}/finalize`, {
                     method: 'POST',
@@ -327,7 +647,8 @@
                 });
                 const result = await res.json();
                 if (res.ok && result.success) {
-                    sessionStorage.removeItem('reviewer_detail_cache_v2_' + this.pesertaId);
+                    sessionStorage.removeItem(this.getCacheKey());
+                    sessionStorage.removeItem(this.getPendingEditsKey());
                     sessionStorage.removeItem('reviewer_tasks_cache');
                     sessionStorage.removeItem('reviewer_flags_' + this.pesertaId);
                     this.flags = {};
@@ -343,7 +664,7 @@
             }
         },
 
-        applyData(data) {
+        applyData(data, fromServer = false) {
             this.reviewerKey    = data.reviewer_key || null;
             this.Penugasan    = data.Penugasan    || {};
             this.institusi      = data.institusi      || {};
@@ -357,27 +678,68 @@
             // isDone = true jika status GRADED, VALIDATING, FINALIZED, PUBLISHED, atau REJECTED
             this.isDone = ['GRADED', 'VALIDATING', 'FINALIZED', 'PUBLISHED', 'REJECTED'].includes(this.Penugasan.status);
             if (this.adminReadonly) this.isDone = true;
+
+            const pendingEdits = (!this.isDone && fromServer) ? this.loadPendingEdits() : {};
+            const now = Date.now();
+            let pendingChanged = false;
+
             this.rubrikData.forEach(kategori => {
                 kategori.pertanyaan.forEach(q => {
+                    let dbScore = null;
+                    let dbNote = '';
                     if (q.jawaban_peserta) {
                         this.answers[q.id] = q.jawaban_peserta.opsi_dipilih
                             ? q.jawaban_peserta.opsi_dipilih.keterangan
                             : q.jawaban_peserta.jawaban_teks;
                         this.links[q.id] = q.jawaban_peserta.tautan_bukti_drive;
-                        if (q.jawaban_peserta.skor_validasi_reviewer !== null) {
-                            this.reviewerScores[q.id] = parseInt(q.jawaban_peserta.skor_validasi_reviewer, 10);
+                        const rawScore = q.jawaban_peserta.skor_validasi_reviewer;
+                        if (rawScore !== null && rawScore !== undefined && rawScore !== '' && typeof rawScore !== 'object' && !isNaN(rawScore)) {
+                            dbScore = parseInt(rawScore, 10);
                         }
-                        // Load catatan reviewer dari database
-                        if (q.jawaban_peserta.note_reviewer) {
-                            this.reviewerNotes[q.id] = q.jawaban_peserta.note_reviewer;
+                        if (q.jawaban_peserta.note_reviewer && typeof q.jawaban_peserta.note_reviewer === 'string') {
+                            dbNote = q.jawaban_peserta.note_reviewer;
+                        }
+                    } else {
+                        this.answers[q.id] = 'Belum diisi';
+                        this.links[q.id] = '';
+                    }
+
+                    // Jika masih ada edit lokal baru yang sedang diproses antrean FIFO server (TTL 30 detik),
+                    // pertahankan nilai lokal agar background refresh tidak menimpa progres reviewer.
+                    const pending = pendingEdits[q.id];
+                    if (pending && (now - pending.ts) < 30000) {
+                        if (dbScore === pending.score && (pending.note === '' || dbNote === pending.note)) {
+                            delete pendingEdits[q.id];
+                            pendingChanged = true;
+                            this.reviewerScores[q.id] = dbScore;
+                            this.reviewerNotes[q.id] = dbNote;
+                        } else {
+                            this.reviewerScores[q.id] = pending.score;
+                            this.reviewerNotes[q.id] = pending.note || dbNote;
+                        }
+                    } else {
+                        if (pending) {
+                            delete pendingEdits[q.id];
+                            pendingChanged = true;
+                        }
+                        // Jangan timpa input jika sedang ada request simpan aktif
+                        if (!fromServer || this.pendingSaveCount === 0 || this.reviewerScores[q.id] === undefined) {
+                            this.reviewerScores[q.id] = dbScore;
+                            this.reviewerNotes[q.id] = dbNote;
                         }
                     }
                 });
             });
+
+            if (this.isDone) {
+                this.savePendingEdits({});
+            } else if (pendingChanged) {
+                this.savePendingEdits(pendingEdits);
+            }
         },
 
         async fetchData() {
-            const cacheKey = 'reviewer_detail_cache_v2_' + this.pesertaId;
+            const cacheKey = this.getCacheKey();
             const apiUrl = this.adminReadonly
                 ? `/admin/api/penugasan/${this.pesertaId}`
                 : `/api/penugasan/reviewer/tasks/detail/${this.pesertaId}`;
@@ -390,7 +752,8 @@
                 const result = await response.json();
                 if (response.ok && result.success) {
                     try { sessionStorage.setItem(cacheKey, JSON.stringify(result.data)); } catch(e) {}
-                    this.applyData(result.data);
+                    this.applyData(result.data, true);
+                    this.updateCache();
                 }
             } catch (error) {
                 console.error('Error fetching data:', error);
@@ -462,7 +825,9 @@
             {{-- Page Header --}}
             <div class="bg-white border-b border-[#e2e8f0] px-[20px] md:px-[40px] pt-[20px] md:pt-[28px] shadow-sm">
                 <template x-if="!adminReadonly">
-                    <a href="{{ route('reviewer.dashboard') }}" wire:navigate class="inline-flex items-center gap-[6px] text-[#62748e] hover:text-[#1b5e20] text-[13px] font-semibold mb-[8px] transition-colors">
+                    <a href="{{ route('reviewer.dashboard') }}" wire:navigate
+                       @click="if (pendingRetryCount > 0) { if (!confirm('Masih ada ' + pendingRetryCount + ' nilai yang belum tersinkron ke Cloud. Yakin ingin keluar sebelum sinkronisasi selesai?')) { $event.preventDefault(); return false; } }"
+                       class="inline-flex items-center gap-[6px] text-[#62748e] hover:text-[#1b5e20] text-[13px] font-semibold mb-[8px] transition-colors">
                         <i data-lucide="arrow-left" class="w-[14px] h-[14px]"></i> Kembali ke Daftar Plotting
                     </a>
                 </template>
@@ -472,7 +837,7 @@
                     </a>
                 </template>
 
-                <div class="flex flex-col md:flex-row items-start justify-between md:items-end mb-[20px]">
+                <div class="flex flex-col md:flex-row items-start justify-between md:items-end mb-[20px] gap-4">
                     <div>
                         <h1 class="font-bold text-[#1d293d] text-[20px] md:text-[26px] tracking-tight flex flex-col md:flex-row items-start md:items-center gap-[8px] md:gap-[12px]">
                             Menu Penilaian - <span x-text="institusi.nama_institusi"></span>
@@ -485,6 +850,42 @@
                             </span>
                         </h1>
                         <p class="text-[#62748e] text-[13px] md:text-[15px] mt-[6px]">Review isian data, periksa dokumen, dan berikan skor final (1-5).</p>
+                    </div>
+
+                    {{-- Cloud Sync Status Indicator (Reviewer Multi-Device Safe) --}}
+                    <div class="shrink-0 flex items-center gap-2" x-cloak>
+                        {{-- Synced (Aman di Cloud) --}}
+                        <template x-if="cloudStatus === 'synced' && !isSaving && !isRetrying">
+                            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#ecfdf5] border border-[#a7f3d0] text-[#065f46] text-[12px] font-bold shadow-xs transition-all">
+                                <span class="w-2 h-2 rounded-full bg-[#10b981]"></span>
+                                <i data-lucide="cloud" class="w-3.5 h-3.5 text-[#059669]"></i>
+                                <span>Aman di Cloud</span>
+                                <span x-show="lastSaved" class="text-[10px] text-[#047857]/80 font-normal border-l border-[#a7f3d0] pl-2" x-text="'Pukul ' + lastSaved"></span>
+                            </div>
+                        </template>
+
+                        {{-- Syncing (Sedang Menghubungkan) --}}
+                        <template x-if="cloudStatus === 'syncing' || isRetrying || (isSaving && cloudStatus !== 'pending')">
+                            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#eff6ff] border border-[#bfdbfe] text-[#1e40af] text-[12px] font-bold shadow-xs transition-all">
+                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-[#2563eb] animate-spin"></i>
+                                <span>Menyinkronkan...</span>
+                            </div>
+                        </template>
+
+                        {{-- Pending Retry 30s --}}
+                        <template x-if="cloudStatus === 'pending' && !isRetrying">
+                            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#fffbeb] border border-[#fde68a] text-[#92400e] text-[12px] font-bold shadow-xs transition-all">
+                                <span class="w-2 h-2 rounded-full bg-[#f59e0b] animate-ping"></span>
+                                <i data-lucide="cloud-off" class="w-3.5 h-3.5 text-[#d97706]"></i>
+                                <span>
+                                    <span x-text="pendingRetryCount"></span> nilai tertunda
+                                    <span x-show="retrySecondsLeft > 0" class="font-medium text-[#b45309]">(Sync dlm <span class="font-bold font-mono" x-text="retrySecondsLeft"></span>s)</span>
+                                </span>
+                                <button type="button" @click="executeBatchRetry()" class="ml-1 px-2.5 py-0.5 text-[11px] font-bold rounded-md bg-[#fef3c7] hover:bg-[#fde68a] text-[#78350f] border border-[#fcd34d] transition-colors cursor-pointer shadow-xs">
+                                    Sync Sekarang
+                                </button>
+                            </div>
+                        </template>
                     </div>
                 </div>
 
@@ -501,9 +902,12 @@
                         <i data-lucide="file-text" class="w-[16px] h-[16px] inline-block mr-1 mb-0.5"></i> Form Penilaian Rubrik
                     </button>
                     <button @click="activeTab = 'hasil'"
-                        class="py-[16px] text-[14px] font-bold transition-colors border-b-[3px]"
+                        class="py-[16px] text-[14px] font-bold transition-colors border-b-[3px] flex items-center gap-2"
                         :class="activeTab === 'hasil' ? 'text-[#1b5e20] border-[#1b5e20]' : 'text-[#64748b] border-transparent hover:text-[#1b5e20]'">
-                        <i data-lucide="bar-chart-2" class="w-[16px] h-[16px] inline-block mr-1 mb-0.5"></i> Hasil Penilaian
+                        <span><i data-lucide="bar-chart-2" class="w-[16px] h-[16px] inline-block mr-1 mb-0.5"></i> Hasil Penilaian</span>
+                        <span class="px-2 py-0.5 text-[11px] rounded-full font-semibold transition-colors"
+                            :class="isAllScored ? 'bg-emerald-100 text-[#1b5e20]' : (isNoneScored ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700')"
+                            x-text="totalScoredCount + '/' + totalQuestions"></span>
                     </button>
                 </div>
             </div>
@@ -921,6 +1325,9 @@
                                                             <span x-show="saveStatus[q.id] === 'saved'" style="display:none;" class="text-[10px] text-[#1b5e20] font-semibold inline-flex items-center gap-1">
                                                                 <i data-lucide="check" class="w-3 h-3"></i> Tersimpan
                                                             </span>
+                                                            <span x-show="saveStatus[q.id] === 'pending_retry'" style="display:none;" class="text-[10px] text-amber-600 font-medium inline-flex items-center gap-1" title="Menunggu sinkronisasi otomatis ke server">
+                                                                <i data-lucide="clock" class="w-3 h-3"></i> Menunggu Sync
+                                                            </span>
                                                         </h4>
                                                         <div class="flex items-center gap-[12px]">
                                                             <template x-if="isDone && (!reviewerScores[q.id] && reviewerScores[q.id] !== 0)">
@@ -937,7 +1344,21 @@
                                                                     :class="isDone ? 'bg-[#f1f5f9] border-[#cbd5e1] text-[#94a3b8]' : 'border-[#cbd5e1] text-[#1b5e20] bg-white'"
                                                                     :disabled="isDone"
                                                                     x-model.number="reviewerScores[q.id]"
-                                                                    @input="if(reviewerScores[q.id] < 0) reviewerScores[q.id] = 0; if(reviewerScores[q.id] > 5) reviewerScores[q.id] = 5; reviewerScores[q.id] = parseInt(reviewerScores[q.id], 10) || 0;"
+                                                                    @input="
+                                                                        let v = reviewerScores[q.id];
+                                                                        if (v === '' || v === null || v === undefined) {
+                                                                            reviewerScores[q.id] = null;
+                                                                        } else {
+                                                                            v = parseInt(v, 10);
+                                                                            if (isNaN(v)) {
+                                                                                reviewerScores[q.id] = null;
+                                                                            } else {
+                                                                                if (v < 0) v = 0;
+                                                                                if (v > 5) v = 5;
+                                                                                reviewerScores[q.id] = v;
+                                                                            }
+                                                                        }
+                                                                    "
                                                                     @blur="saveQuestionScore(q.id)"
                                                                     @wheel.prevent />
                                                             </template>
@@ -1013,39 +1434,51 @@
                     <div x-show="activeTab === 'hasil'" x-transition.opacity.duration.300ms style="display: none;" class="space-y-5">
 
                         {{-- Banner Total Penilaian --}}
-                        <div class="rounded-lg p-6 md:p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-5 relative overflow-hidden"
-                            :class="showReviewScore ? 'bg-[#1b5e20]' : 'bg-orange-500'">
+                        <div class="rounded-lg p-6 md:p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-5 relative overflow-hidden bg-[#1b5e20]">
                             <div class="relative z-10 flex-1">
-                                <template x-if="!showReviewScore">
-                                    <div class="flex items-start gap-2 bg-white/20 border border-white/30 rounded-lg px-3 py-2 mb-3 max-w-[420px]">
-                                        <svg class="w-3.5 h-3.5 text-white shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                        </svg>
-                                        <p class="text-[11px] text-white/90 font-medium leading-relaxed">Nilai estimasi dari peserta</p>
-                                    </div>
-                                </template>
-                                <template x-if="showReviewScore">
-                                    <div class="flex items-center gap-2 bg-white/20 border border-white/30 rounded-lg px-3 py-2 mb-3 max-w-[320px]">
-                                        <svg class="w-3.5 h-3.5 text-white shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                        </svg>
-                                        <p class="text-[11px] text-white/90 font-semibold" x-text="isDone ? 'Nilai Final — Telah Divalidasi Reviewer' : 'Skor Sementara Hasil Penilaian Reviewer'"></p>
-                                    </div>
-                                </template>
+                                <div class="flex items-center gap-2 bg-white/20 border border-white/30 rounded-lg px-3 py-1.5 mb-3 w-fit">
+                                    <svg class="w-3.5 h-3.5 text-white shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    <p class="text-[11px] text-white/90 font-semibold" x-text="isDone ? 'Nilai Final — Telah Divalidasi Reviewer' : 'Skor Sementara Hasil Penilaian Reviewer'"></p>
+                                </div>
+
                                 <h2 class="text-white font-bold text-[22px] md:text-[28px] leading-tight tracking-tight">
                                     Total Penilaian <span x-text="new Date().getFullYear()"></span>
                                 </h2>
                                 <p class="text-white/70 text-[13px] md:text-[14px] font-medium mt-1" x-text="institusi.nama_institusi"></p>
+
+                                {{-- Progress Penilaian Reviewer Bar --}}
+                                <div class="mt-4 max-w-[420px] bg-black/20 border border-white/10 rounded-lg p-2.5 backdrop-blur-sm">
+                                    <div class="flex items-center justify-between text-[11px] text-white/90 mb-1 font-medium">
+                                        <span class="flex items-center gap-1.5">
+                                            <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-white"></i> Progres Penilaian
+                                        </span>
+                                        <span class="font-bold" x-text="totalScoredCount + ' / ' + totalQuestions + ' Indikator (' + progressPercentage + '%)'"></span>
+                                    </div>
+                                    <div class="w-full bg-white/20 rounded-full h-2 overflow-hidden">
+                                        <div class="bg-white h-2 rounded-full transition-all duration-300" :style="'width: ' + progressPercentage + '%'"></div>
+                                    </div>
+                                    <p class="text-[10px] text-white/75 mt-1.5"
+                                        x-text="isNoneScored ? 'Belum ada indikator yang dinilai — mulai isi pada tab Form Penilaian Rubrik.' : (isAllScored ? 'Seluruh indikator telah dinilai dan dihitung sesuai bobot rubrik.' : (totalScoredCount + ' indikator telah dinilai, tersisa ' + (totalQuestions - totalScoredCount) + ' indikator lagi.'))"></p>
+                                </div>
                             </div>
+
+                            {{-- Circle Score --}}
                             <div class="relative z-10 shrink-0">
                                 <div class="relative w-[170px] h-[170px] md:w-[190px] md:h-[190px]">
                                     <svg class="w-full h-full -rotate-90" viewBox="0 0 120 120">
                                         <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="10" />
+                                        <circle cx="60" cy="60" r="52" fill="none" stroke="white" stroke-width="10"
+                                            stroke-dasharray="326.72"
+                                            :stroke-dashoffset="326.72 - (326.72 * (Math.min(100, Math.max(0, hasilTotalCapaian))) / 100)"
+                                            stroke-linecap="round"
+                                            class="transition-all duration-500 ease-out" />
                                     </svg>
                                     <div class="absolute inset-0 flex flex-col items-center justify-center">
                                         <span class="text-white font-extrabold text-[28px] md:text-[32px] leading-none tracking-tight whitespace-nowrap"
-                                            x-text="Number(hasilTotalCapaian).toFixed(0)"></span>
-                                        <span class="text-white/80 text-[10px] font-bold tracking-[0.2em] uppercase mt-2"
+                                            x-text="formatScore(hasilTotalCapaian)"></span>
+                                        <span class="text-white/80 text-[10px] font-bold tracking-[0.2em] uppercase mt-2 text-center"
                                             x-text="showReviewScore ? 'Skor Final' : 'Estimasi Skor'"></span>
                                     </div>
                                 </div>
@@ -1072,17 +1505,23 @@
                                                 <i data-lucide="folder-open" class="w-5 h-5" x-show="openCategories[idx]" style="display:none;"></i>
                                             </div>
                                             <div>
-                                                <h3 class="font-bold text-[#1d293d] text-[15px] group-hover:text-[#1b5e20] transition-colors" x-text="cat.name"></h3>
+                                                <div class="flex flex-wrap items-center gap-2">
+                                                    <h3 class="font-bold text-[#1d293d] text-[15px] group-hover:text-[#1b5e20] transition-colors" x-text="cat.name"></h3>
+                                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                                                        :class="cat.is_empty ? 'bg-slate-100 text-slate-500' : (cat.is_complete ? 'bg-emerald-50 text-[#1b5e20] border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200')"
+                                                        x-text="cat.is_empty ? ('Belum dinilai (0/' + cat.total_count + ')') : (cat.is_complete ? ('Lengkap (' + cat.scored_count + '/' + cat.total_count + ')') : (cat.scored_count + '/' + cat.total_count + ' dinilai'))"></span>
+                                                </div>
                                                 <p class="text-[11px] text-[#64748b] font-medium uppercase tracking-wider mt-0.5">Klik untuk melihat detail pertanyaan</p>
                                             </div>
                                         </div>
 
-                                        <div class="flex items-center gap-6">
-                                            <div class="text-right hidden md:block border-r border-[#e2e8f0] pr-6">
+                                        <div class="flex items-center gap-4 md:gap-6 shrink-0">
+                                            <div class="text-right border-r border-[#e2e8f0] pr-4 md:pr-6">
                                                 <p class="text-[10px] font-bold text-[#94a3b8] uppercase tracking-widest mb-1">Capaian Skor</p>
                                                 <div class="flex items-baseline gap-1 justify-end">
-                                                    <span class="text-[18px] font-extrabold text-[#1b5e20]"
-                                                        x-text="Number(cat.capaian_skor || 0).toFixed(0)"></span>
+                                                    <span class="text-[18px] font-extrabold"
+                                                        :class="cat.is_empty ? 'text-[#94a3b8]' : 'text-[#1b5e20]'"
+                                                        x-text="formatScore(cat.capaian_skor)"></span>
                                                 </div>
                                                 <p class="text-[10px] text-[#64748b] font-medium mt-0.5">
                                                     dari bobot <span x-text="Number(cat.bobot || 0).toFixed(0)"></span>
@@ -1110,20 +1549,20 @@
                                                             <p class="text-[14px] font-semibold text-[#1e293b] leading-relaxed max-w-[500px]" x-text="item.title"></p>
                                                         </div>
                                                         <div class="shrink-0 flex flex-col items-end gap-1.5">
-                                                            <template x-if="item.is_validated">
+                                                            <template x-if="item.has_score">
                                                                 <div class="flex flex-col items-end">
-                                                                    <span class="text-[9px] font-bold text-[#059669] uppercase tracking-[0.1em] mb-1">Skor Akhir</span>
+                                                                    <span class="text-[9px] font-bold text-[#059669] uppercase tracking-[0.1em] mb-1">Skor Reviewer</span>
                                                                     <div class="flex items-center gap-1.5 bg-[#ecfdf5] border border-[#10b981]/20 px-3 py-1.5 rounded-lg">
                                                                         <i data-lucide="check-circle" class="w-3.5 h-3.5 text-[#059669]"></i>
                                                                         <span class="text-[13px] font-bold text-[#047857]" x-text="parseInt(item.score) + ' / ' + item.max"></span>
                                                                     </div>
                                                                 </div>
                                                             </template>
-                                                            <template x-if="!item.is_validated">
+                                                            <template x-if="!item.has_score">
                                                                 <div class="flex flex-col items-end">
-                                                                    <span class="text-[9px] font-bold text-[#d97706] uppercase tracking-[0.1em] mb-1">Estimasi Skor</span>
-                                                                    <div class="flex items-center gap-1.5 bg-[#fffbeb] border border-[#f59e0b]/20 px-3 py-1.5 rounded-lg">
-                                                                        <span class="text-[13px] font-bold text-[#b45309]" x-text="parseInt(item.score) + ' / ' + item.max"></span>
+                                                                    <span class="text-[9px] font-bold text-[#94a3b8] uppercase tracking-[0.1em] mb-1">Status</span>
+                                                                    <div class="flex items-center gap-1.5 bg-[#f8fafc] border border-[#cbd5e1] px-3 py-1.5 rounded-lg">
+                                                                        <span class="text-[12px] font-bold text-[#94a3b8]">Belum Dinilai (0 / 5)</span>
                                                                     </div>
                                                                 </div>
                                                             </template>
