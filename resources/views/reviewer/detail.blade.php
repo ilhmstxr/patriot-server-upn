@@ -12,6 +12,8 @@
         loading: true,
         isLocking: false,
         showLockConfirm: false,
+        catatan_penilaian: '',
+        konfirmasi_catatan: false,
         pesertaId: {{ $reqId }},
         
         // Data dari API
@@ -48,17 +50,54 @@
         retryCountdownInterval: null,
         retryAttempt: 0,
         isRetrying: false,
+        lastSyncError: '', // Detail teknis kendala sinkronisasi
+        isErrorCopied: false,
+        showErrorPopover: false,
 
         get pendingRetryCount() {
             return Object.keys(this.pendingRetryScores).length;
         },
 
-        markRetryNeeded(questionId, score, note) {
+        markRetryNeeded(questionId, score, note, errMsg = '') {
             if (this.adminReadonly || this.isDone) return;
             this.pendingRetryScores[questionId] = score;
             this.pendingRetryNotes[questionId] = note;
             this.cloudStatus = 'pending';
+            if (errMsg) {
+                this.lastSyncError = errMsg;
+            }
             this.scheduleSyncRetry(30);
+        },
+
+        copyErrorToClipboard() {
+            const errText = this.lastSyncError || 'Terjadi kesalahan pada server saat sinkronisasi data.';
+            const textToCopy = `[Error Sistem Patriot]\nKendala: Sedang mengalami kendala sinkronisasi pada server.\nDetail: ${errText}\nPeserta ID: ${this.pesertaId}\nWaktu: ${new Date().toLocaleString('id-ID')}`;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    this.isErrorCopied = true;
+                    setTimeout(() => { this.isErrorCopied = false; }, 2500);
+                }).catch(() => {
+                    this.fallbackCopyText(textToCopy);
+                });
+            } else {
+                this.fallbackCopyText(textToCopy);
+            }
+        },
+
+        fallbackCopyText(text) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-999999px";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                this.isErrorCopied = true;
+                setTimeout(() => { this.isErrorCopied = false; }, 2500);
+            } catch (err) {}
+            document.body.removeChild(textArea);
         },
 
         unmarkRetry(questionId) {
@@ -157,15 +196,19 @@
                 if (this.pendingRetryCount === 0) {
                     this.cloudStatus = 'synced';
                     this.retryAttempt = 0;
+                    this.lastSyncError = '';
+                    this.showErrorPopover = false;
                 } else {
                     // Masih ada pertanyaan yang diedit saat batch request sedang berlangsung
                     this.cloudStatus = 'pending';
                     this.scheduleSyncRetry(30);
                 }
             } catch (err) {
+                const errDetail = err?.message || 'Server connection failed / 500 error';
                 console.warn('Auto-retry batch sync gagal, menjadwalkan ulang dalam 30s:', err);
                 this.retryAttempt++;
                 this.cloudStatus = 'pending';
+                this.lastSyncError = `Batch sync gagal (${errDetail})`;
                 const nextDelay = Math.min(60, 30 + (this.retryAttempt * 5));
                 this.scheduleSyncRetry(nextDelay);
             } finally {
@@ -533,9 +576,10 @@
                     this.saveStatus[questionId] = (hasValidScore || trimmedNote.length >= 20) ? 'saved' : '';
                     setTimeout(() => { if (this.saveStatus[questionId] === 'saved') this.saveStatus[questionId] = ''; }, 2000);
                 } catch (e) {
+                    const errDetail = e?.message || 'Server 500 / Network Error';
                     console.error('Gagal menyimpan skor via FIFO queue, dijadwalkan sync ulang 30s:', e);
                     this.saveStatus[questionId] = 'pending_retry';
-                    this.markRetryNeeded(questionId, hasValidScore ? parseInt(skor, 10) : '', trimmedNote.length >= 20 ? note : '');
+                    this.markRetryNeeded(questionId, hasValidScore ? parseInt(skor, 10) : '', trimmedNote.length >= 20 ? note : '', `Gagal menyimpan soal #${questionId} (${errDetail})`);
                 } finally {
                     let d = new Date();
                     this.lastSaved = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
@@ -572,12 +616,15 @@
                     this.updateCache();
                     this.clearAllRetries();
                 } catch (e) {
+                    const errDetail = e?.message || 'Server 500 / Network Error';
                     console.error('Gagal menyimpan semua skor reviewer via FIFO queue, dijadwalkan retry 30s:', e);
+                    const errMsg = `Gagal menyimpan semua nilai (${errDetail})`;
+                    this.lastSyncError = errMsg;
                     for (const [qId, skor] of Object.entries(this.reviewerScores)) {
                         const sVal = (skor !== null && skor !== undefined && skor !== '' && !isNaN(skor)) ? parseInt(skor, 10) : '';
                         const nVal = this.reviewerNotes[qId] || '';
                         if (sVal !== '' || (nVal && nVal.trim().length >= 20)) {
-                            this.markRetryNeeded(qId, sVal, nVal);
+                            this.markRetryNeeded(qId, sVal, nVal, errMsg);
                         }
                     }
                 }
@@ -624,11 +671,31 @@
                 return;
             }
             this.showLockConfirm = true;
+            this.$nextTick(() => { if (window.lucide) window.lucide.createIcons(); });
         },
 
         async lockReview() {
+            const cleanCatatan = (this.catatan_penilaian || '').trim();
+            if (cleanCatatan.length < 50) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Catatan Belum Lengkap',
+                    text: 'Catatan penilaian / executive summary wajib diisi minimal 50 karakter (saat ini ' + cleanCatatan.length + ' karakter).',
+                    confirmButtonColor: '#1b5e20'
+                });
+                return;
+            }
+            if (!this.konfirmasi_catatan) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Pernyataan Konfirmasi',
+                    text: 'Harap centang konfirmasi bahwa reviewer sudah menilai dan mengisi catatan penilaian.',
+                    confirmButtonColor: '#1b5e20'
+                });
+                return;
+            }
+
             this.isLocking = true;
-            this.showLockConfirm = false;
             try {
                 if (this.pendingRetryCount > 0) {
                     await this.executeBatchRetry();
@@ -643,22 +710,42 @@
                         'Authorization': 'Bearer ' + localStorage.getItem('auth_token'),
                         'Content-Type': 'application/json',
                         'Accept': 'application/json'
-                    }
+                    },
+                    body: JSON.stringify({
+                        catatan_penilaian: cleanCatatan
+                    })
                 });
                 const result = await res.json();
                 if (res.ok && result.success) {
+                    this.showLockConfirm = false;
                     sessionStorage.removeItem(this.getCacheKey());
                     sessionStorage.removeItem(this.getPendingEditsKey());
                     sessionStorage.removeItem('reviewer_tasks_cache');
                     sessionStorage.removeItem('reviewer_flags_' + this.pesertaId);
                     this.flags = {};
                     await this.fetchData();
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Finalisasi Berhasil',
+                        text: 'Penilaian dan catatan penilaian (executive summary) berhasil disimpan. Status peserta berubah menjadi GRADED.',
+                        confirmButtonColor: '#1b5e20'
+                    });
                 } else {
-                    alert(result.message || 'Gagal memfinalisasi penilaian.');
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Gagal Finalisasi',
+                        text: result.message || 'Gagal memfinalisasi penilaian.',
+                        confirmButtonColor: '#1b5e20'
+                    });
                 }
             } catch(e) {
                 console.error(e);
-                alert('Terjadi kesalahan jaringan.');
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Terjadi Kesalahan',
+                    text: e.message || 'Terjadi kesalahan jaringan.',
+                    confirmButtonColor: '#1b5e20'
+                });
             } finally {
                 this.isLocking = false;
             }
@@ -675,6 +762,9 @@
             this.jabatan_pic    = data.jabatan_pic;
             this.email_pic      = data.email_pic;
             this.no_hp_pic      = data.no_hp_pic;
+            if (this.Penugasan && this.Penugasan.catatan_penilaian) {
+                this.catatan_penilaian = this.Penugasan.catatan_penilaian;
+            }
             // isDone = true jika status GRADED, VALIDATING, FINALIZED, PUBLISHED, atau REJECTED
             this.isDone = ['GRADED', 'VALIDATING', 'FINALIZED', 'PUBLISHED', 'REJECTED'].includes(this.Penugasan.status);
             if (this.adminReadonly) this.isDone = true;
@@ -872,18 +962,77 @@
                             </div>
                         </template>
 
-                        {{-- Pending Retry 30s --}}
+                        {{-- Pending Retry 30s dengan Popover Hover & Salin Pesan Eror --}}
                         <template x-if="cloudStatus === 'pending' && !isRetrying">
-                            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#fffbeb] border border-[#fde68a] text-[#92400e] text-[12px] font-bold shadow-xs transition-all">
-                                <span class="w-2 h-2 rounded-full bg-[#f59e0b] animate-ping"></span>
-                                <i data-lucide="cloud-off" class="w-3.5 h-3.5 text-[#d97706]"></i>
-                                <span>
-                                    <span x-text="pendingRetryCount"></span> tertunda
-                                    <span x-show="retrySecondsLeft > 0" class="font-medium text-[#b45309]">(sinkronisasi dalam <span class="font-bold font-mono" x-text="retrySecondsLeft"></span>s)</span>
-                                </span>
-                                <button type="button" @click="executeBatchRetry()" class="ml-1 px-2.5 py-0.5 text-[11px] font-bold rounded-md bg-[#fef3c7] hover:bg-[#fde68a] text-[#78350f] border border-[#fcd34d] transition-colors cursor-pointer shadow-xs">
-                                    Sync Sekarang
-                                </button>
+                            <div class="relative inline-block"
+                                 @mouseenter="showErrorPopover = true; $nextTick(() => { if (window.lucide) window.lucide.createIcons(); })"
+                                 @mouseleave="showErrorPopover = false">
+                                
+                                {{-- Status Pill Formal & Ringkas --}}
+                                <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#fffbeb] hover:bg-[#fef3c7] border border-[#fde68a] text-[#92400e] text-[12px] font-bold shadow-xs transition-all cursor-pointer">
+                                    <span class="w-2 h-2 rounded-full bg-[#f59e0b] animate-ping"></span>
+                                    <i data-lucide="cloud-off" class="w-3.5 h-3.5 text-[#d97706]"></i>
+                                    <span>
+                                        <span x-text="pendingRetryCount"></span> Data Belum Tersimpan
+                                        <span x-show="retrySecondsLeft > 0" class="font-medium text-[#b45309]">(Sync dlm <span class="font-bold font-mono" x-text="retrySecondsLeft"></span>s)</span>
+                                    </span>
+                                    <button type="button"
+                                            @click.stop="executeBatchRetry()"
+                                            class="ml-1 px-2.5 py-0.5 text-[11px] font-bold rounded-md bg-[#fef3c7] hover:bg-[#fde68a] text-[#78350f] border border-[#fcd34d] transition-colors cursor-pointer shadow-xs">
+                                        Sync Sekarang
+                                    </button>
+                                </div>
+
+                                {{-- Popup Hover Informasi Eror & Tombol Salin --}}
+                                <div x-show="showErrorPopover"
+                                     x-transition:enter="transition ease-out duration-150"
+                                     x-transition:enter-start="opacity-0 translate-y-1"
+                                     x-transition:enter-end="opacity-100 translate-y-0"
+                                     x-transition:leave="transition ease-in duration-100"
+                                     x-transition:leave-start="opacity-100 translate-y-0"
+                                     x-transition:leave-end="opacity-0 translate-y-1"
+                                     style="display: none;"
+                                     class="absolute right-0 top-full mt-2 w-[320px] sm:w-[360px] bg-white rounded-xl shadow-xl border border-amber-200 p-3.5 z-50 text-left">
+                                    
+                                    {{-- Pesan Eror Formal --}}
+                                    <div class="flex items-start gap-2.5 mb-2.5">
+                                        <div class="w-7 h-7 rounded-lg bg-amber-100 flex items-center justify-center shrink-0 text-amber-700 mt-0.5">
+                                            <i data-lucide="alert-circle" class="w-4 h-4"></i>
+                                        </div>
+                                        <div class="min-w-0 flex-1">
+                                            <h4 class="text-[12px] font-bold text-slate-800">Sedang Mengalami Kendala Server</h4>
+                                            <p class="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                                                Sedang mengalami eror dalam server. Data perubahan Anda tetap tersimpan di memori browser dan akan otomatis dicoba ulang. Silakan hubungi admin untuk mengatasi eror tersebut jika kendala berlanjut.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {{-- Technical Error Code Box + Copy Button --}}
+                                    <div class="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex items-center justify-between gap-2">
+                                        <div class="min-w-0 flex-1">
+                                            <p class="text-[9px] font-bold uppercase tracking-wider text-slate-400">Pesan Teknis Eror</p>
+                                            <p class="text-[11px] font-mono text-slate-700 truncate" x-text="lastSyncError || 'Terjadi kesalahan pada server (HTTP 500 / Network Error)'"></p>
+                                        </div>
+                                        <button type="button"
+                                                @click.stop="copyErrorToClipboard()"
+                                                class="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer"
+                                                :class="isErrorCopied ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs'"
+                                                :title="isErrorCopied ? 'Tersalin ke clipboard' : 'Salin pesan eror untuk dikirim ke admin'">
+                                            <template x-if="!isErrorCopied">
+                                                <span class="inline-flex items-center gap-1">
+                                                    <i data-lucide="copy" class="w-3.5 h-3.5 text-slate-500"></i>
+                                                    <span>Salin Eror</span>
+                                                </span>
+                                            </template>
+                                            <template x-if="isErrorCopied">
+                                                <span class="inline-flex items-center gap-1">
+                                                    <i data-lucide="check" class="w-3.5 h-3.5 text-emerald-600"></i>
+                                                    <span class="font-bold">Tersalin!</span>
+                                                </span>
+                                            </template>
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </template>
                     </div>
@@ -1325,8 +1474,8 @@
                                                             <span x-show="saveStatus[q.id] === 'saved'" style="display:none;" class="text-[10px] text-[#1b5e20] font-semibold inline-flex items-center gap-1">
                                                                 <i data-lucide="check" class="w-3 h-3"></i> Tersimpan
                                                             </span>
-                                                            <span x-show="saveStatus[q.id] === 'pending_retry'" style="display:none;" class="text-[10px] text-amber-600 font-medium inline-flex items-center gap-1" title="Menunggu sinkronisasi otomatis ke server">
-                                                                <i data-lucide="clock" class="w-3 h-3"></i> Menunggu Sync
+                                                            <span x-show="saveStatus[q.id] === 'pending_retry'" style="display:none;" class="text-[10px] text-amber-600 font-medium inline-flex items-center gap-1" title="Data belum tersimpan di server, akan disinkronkan otomatis">
+                                                                <i data-lucide="clock" class="w-3 h-3"></i> Belum Tersimpan
                                                             </span>
                                                         </h4>
                                                         <div class="flex items-center gap-[12px]">
@@ -1612,6 +1761,20 @@
                                 </div>
                             </template>
                         </div>
+
+                        {{-- Catatan Penilaian (Executive Summary) Hasil Card --}}
+                        <div x-show="catatan_penilaian && catatan_penilaian.trim().length > 0" class="bg-white border border-[#e0e0e0] rounded-xl p-6 shadow-sm">
+                            <div class="flex items-center gap-3 pb-3 border-b border-slate-100 mb-3">
+                                <div class="w-9 h-9 rounded-lg bg-emerald-50 text-[#1b5e20] flex items-center justify-center shrink-0 border border-emerald-100">
+                                    <i data-lucide="clipboard-signature" class="w-5 h-5"></i>
+                                </div>
+                                <div>
+                                    <h4 class="font-bold text-[#1d293d] text-[15px]">Catatan Penilaian (Executive Summary)</h4>
+                                    <p class="text-[11px] text-[#64748b]">Ulasan menyeluruh yang dicantumkan pada laporan resume hasil penilaian</p>
+                                </div>
+                            </div>
+                            <p class="text-[13px] text-slate-700 leading-relaxed whitespace-pre-line" x-text="catatan_penilaian"></p>
+                        </div>
                     </div>
 
                 </div>
@@ -1638,37 +1801,113 @@
                 </div>
             </div>
 
-            {{-- Lock Confirmation Modal --}}
+            {{-- Executive Summary / Catatan Penilaian Finalisasi Modal --}}
             <div x-show="showLockConfirm" x-cloak
-                class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 px-4"
+                class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 py-6 overflow-y-auto"
                 x-transition:enter="transition ease-out duration-200"
                 x-transition:enter-start="opacity-0"
                 x-transition:enter-end="opacity-100"
                 x-transition:leave="transition ease-in duration-150"
                 x-transition:leave-start="opacity-100"
                 x-transition:leave-end="opacity-0">
-                <div class="bg-white rounded-[16px] shadow-2xl w-full max-w-[420px] p-[28px] border border-[#e2e8f0]">
-                    <div class="flex items-center gap-3 mb-[16px]">
-                        <div class="w-[44px] h-[44px] rounded-full bg-orange-50 flex items-center justify-center shrink-0">
-                            <i data-lucide="alert-triangle" class="w-[22px] h-[22px] text-orange-500"></i>
+                <div class="bg-white rounded-2xl shadow-2xl w-full max-w-[620px] p-6 sm:p-8 border border-slate-200 my-auto text-left"
+                    @click.away="if (!isLocking) showLockConfirm = false">
+                    
+                    {{-- Header Modal --}}
+                    <div class="flex items-start gap-4 mb-5 pb-4 border-b border-slate-100">
+                        <div class="w-12 h-12 rounded-xl bg-emerald-50 text-[#1b5e20] flex items-center justify-center shrink-0 border border-emerald-100 shadow-sm">
+                            <i data-lucide="clipboard-signature" class="w-6 h-6"></i>
                         </div>
-                        <div>
-                            <h3 class="font-bold text-[#1d293d] text-[16px]">Finalisasi Penilaian?</h3>
-                            <p class="text-[13px] text-[#64748b] mt-[2px]">Tindakan ini tidak dapat dibatalkan.</p>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-bold text-[#1d293d] text-lg">Catatan Penilaian / Executive Summary</h3>
+                                <span class="bg-emerald-100 text-[#1b5e20] text-[11px] font-semibold px-2 py-0.5 rounded-full">Finalisasi</span>
+                            </div>
+                            <p class="text-xs text-slate-500 mt-0.5">
+                                Masukkan ulasan menyeluruh untuk <strong class="text-slate-700 font-semibold" x-text="institusi.nama_institusi || 'Perguruan Tinggi'"></strong> yang akan diterbitkan pada Laporan Resume Hasil Penilaian.
+                            </p>
                         </div>
                     </div>
-                    <p class="text-[14px] text-[#45556c] leading-relaxed mb-[20px]">
-                        Setelah Anda mengkonfirmasi, status peserta akan berubah menjadi <strong class="text-green-700">GRADED</strong> dan peserta dapat melihat hasil penilaian final dari Anda. Pastikan semua skor sudah benar.
-                    </p>
-                    <div class="flex gap-[10px] justify-end">
-                        <button @click="showLockConfirm = false"
-                            class="px-[20px] py-[10px] rounded-[8px] border-2 border-slate-200 text-[14px] font-semibold text-slate-600 hover:border-slate-300 transition-colors">
+
+                    {{-- Form Input Catatan Penilaian --}}
+                    <div class="space-y-4">
+                        <div>
+                            <div class="flex items-center justify-between mb-1.5">
+                                <label for="catatan_penilaian_input" class="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                    <i data-lucide="file-text" class="w-3.5 h-3.5 text-slate-400"></i> Catatan Penilaian (Executive Summary)
+                                    <span class="text-rose-500">*</span>
+                                </label>
+                                <span class="text-xs font-semibold"
+                                    :class="catatan_penilaian.trim().length >= 50 ? 'text-emerald-600' : 'text-slate-400'">
+                                    <span x-text="catatan_penilaian.trim().length"></span> / 50 karakter
+                                </span>
+                            </div>
+
+                            <textarea id="catatan_penilaian_input"
+                                x-model="catatan_penilaian"
+                                :disabled="isLocking"
+                                rows="6"
+                                placeholder="Tuliskan ulasan menyeluruh, evaluasi implementasi nilai Bela Negara, catatan improvisasi penelitian, pengabdian masyarakat, saran peningkatan fasilitas, dan rekomendasi target tindak lanjut bagi institusi ini (minimal 50 karakter)..."
+                                class="w-full text-sm text-slate-800 bg-white border rounded-xl p-3.5 focus:ring-2 focus:ring-[#1b5e20]/20 focus:border-[#1b5e20] outline-none transition placeholder:text-slate-400 resize-y leading-relaxed"
+                                :class="catatan_penilaian.trim().length > 0 && catatan_penilaian.trim().length < 50 ? 'border-amber-400 bg-amber-50/20' : (catatan_penilaian.trim().length >= 50 ? 'border-emerald-300 focus:border-[#1b5e20]' : 'border-slate-200')"></textarea>
+
+                            <div class="flex items-center justify-between mt-1.5 text-xs">
+                                <template x-if="catatan_penilaian.trim().length < 50">
+                                    <span class="text-amber-600 font-medium flex items-center gap-1">
+                                        <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
+                                        Minimal 50 karakter (kurang <span x-text="50 - catatan_penilaian.trim().length"></span> karakter lagi)
+                                    </span>
+                                </template>
+                                <template x-if="catatan_penilaian.trim().length >= 50">
+                                    <span class="text-emerald-600 font-medium flex items-center gap-1">
+                                        <i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i>
+                                        Panjang karakter telah memenuhi syarat minimal
+                                    </span>
+                                </template>
+                            </div>
+                        </div>
+
+                        {{-- Checkbox Konfirmasi Reviewer --}}
+                        <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 hover:bg-slate-100/60 transition-colors">
+                            <label class="flex items-start gap-3 cursor-pointer select-none">
+                                <input type="checkbox"
+                                    x-model="konfirmasi_catatan"
+                                    :disabled="isLocking"
+                                    class="mt-0.5 w-4 h-4 text-[#1b5e20] rounded border-slate-300 focus:ring-[#1b5e20] cursor-pointer">
+                                <span class="text-xs text-slate-700 font-medium leading-relaxed">
+                                    kami, reviewer sudah menilai dan mengisi catatan penilaian
+                                </span>
+                            </label>
+                        </div>
+
+                        {{-- Notice Tindakan Final --}}
+                        <div class="flex items-start gap-2.5 p-3 rounded-lg bg-emerald-50/70 border border-emerald-100 text-[11px] text-[#1b5e20] leading-relaxed">
+                            <i data-lucide="info" class="w-4 h-4 shrink-0 mt-0.5 text-[#1b5e20]"></i>
+                            <span>
+                                Setelah difinalisasi, status peserta akan berubah menjadi <strong>GRADED</strong> dan lembar catatan ini akan dicetak langsung pada halaman depan Laporan Resume Hasil Penilaian.
+                            </span>
+                        </div>
+                    </div>
+
+                    {{-- Actions Modal --}}
+                    <div class="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-slate-100">
+                        <button type="button"
+                            @click="showLockConfirm = false"
+                            :disabled="isLocking"
+                            class="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-colors disabled:opacity-50">
                             Batal
                         </button>
-                        <button @click="lockReview()"
-                            class="px-[20px] py-[10px] rounded-[8px] bg-[#1b5e20] text-white text-[14px] font-bold hover:bg-[#15461c] transition-colors flex items-center gap-2">
-                            <i data-lucide="check" class="w-[16px] h-[16px]"></i>
-                            Ya, Finalisasi
+                        <button type="button"
+                            @click="lockReview()"
+                            :disabled="catatan_penilaian.trim().length < 50 || !konfirmasi_catatan || isLocking"
+                            class="px-5 py-2.5 rounded-xl bg-[#1b5e20] text-white text-xs font-bold hover:bg-[#15461c] transition-all flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#1b5e20]">
+                            <template x-if="isLocking">
+                                <div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                            </template>
+                            <template x-if="!isLocking">
+                                <i data-lucide="lock" class="w-4 h-4"></i>
+                            </template>
+                            <span x-text="isLocking ? 'Memproses Finalisasi...' : 'Ya, Finalisasi Penilaian'"></span>
                         </button>
                     </div>
                 </div>

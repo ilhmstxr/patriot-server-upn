@@ -13,6 +13,7 @@ class Penugasan extends Model
     protected $fillable = [
         'user_id', 'institution_id', 'tahun_periode', 'status', 
         'total_skor_sistem', 'total_skor_akhir', 'skor_rekap_json', 
+        'catatan_penilaian',
         'nama_pic', 'jabatan_pic', 'no_hp_pic',
         'reviewer_1_id', 'reviewer_2_id', 'reviewer_3_id',
         'nilai_reviewer_1', 'nilai_reviewer_2', 'nilai_reviewer_3', 'nilai_rata_rata'

@@ -150,6 +150,15 @@ class ReviewerController extends Controller
                 throw new \Exception("Unauthorized: Akses khusus untuk Reviewer.", 403);
             }
 
+            $request->validate([
+                'catatan_penilaian' => 'required|string|min:50',
+            ], [
+                'catatan_penilaian.required' => 'Catatan penilaian / executive summary wajib diisi.',
+                'catatan_penilaian.min' => 'Catatan penilaian / executive summary minimal 50 karakter.',
+            ]);
+
+            $catatanPenilaian = $request->input('catatan_penilaian');
+
             $penugasan = $this->penugasanRepository->find($pesertaId);
             if (!$penugasan || !in_array($penugasan->status, ['SUBMITTED', 'IN_PROGRESS'])) {
                  throw new \Exception("Penugasan tidak ditemukan atau tidak dapat difinalisasi.", 404);
@@ -181,7 +190,7 @@ class ReviewerController extends Controller
                 $waitAttempts--;
             }
 
-            $this->penugasanService->finalizeReview($penugasan, $reviewerKey);
+            $this->penugasanService->finalizeReview($penugasan, $reviewerKey, $catatanPenilaian);
 
             return $this->successResponse([], 'Penilaian berhasil difinalisasi. Status peserta berubah menjadi GRADED.');
         } catch (\Throwable $e) {

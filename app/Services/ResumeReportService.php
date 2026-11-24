@@ -93,9 +93,10 @@ class ResumeReportService
         $radarKelembagaanSvg = $this->renderRadarKelembagaanSvg($kelembagaanData['raw_scores']);
         $radarMahasiswaSvg = $this->renderRadarMahasiswaSvg($mahasiswaData['raw_scores']);
 
-        // 8. Catatan Penilaian (Status: TBD)
-        $catatanPenilaian = $penugasan->catatan_penilaian ?? 
-            "Penerapan indikator implementasi {$namaInstitusi} secara umum memerlukan improvisasi di poin penelitian, pengabdian masyarakat, serta kegiatan civitas akademika yang berkegiatan di luar di mana kegiatan tersebut mencerminkan esensi dan nilai Bela Negara yang diusung oleh universitas terkait. Beberapa bukti juga masih memerlukan kelengkapan sebagai perwujudan implementasi nilai Bela Negara. Pemanfaatan fasilitas penunjang di kampus untuk disabilitas juga memerlukan perhatian dan peningkatan sehingga mencapai poin yang diinginkanS. Untuk mencapai poin yang lebih optimal, maka diperlukan evaluasi serta penetapan target capaian implementasi nilai – nila bela negara di segala lini, serta pemanfaatan sumber daya manusia yang ada secara optimal. Optimalisasi kegiatan dosen dan tenaga pendidik di bidang pengabdian masyarakat dan penelitian juga perlu dilakukan secara lebih optimal. Output yang diharapkan juga sebaiknya memiliki nilai keberlanjutan yang dampaknya bisa dirasakan oleh masyarakat luas secara berkelanjutan.";
+        // 8. Catatan Penilaian / Executive Summary
+        $catatanPenilaian = !empty(trim($penugasan->catatan_penilaian ?? '')) 
+            ? $penugasan->catatan_penilaian 
+            : "Penerapan indikator implementasi {$namaInstitusi} secara umum memerlukan improvisasi di poin penelitian, pengabdian masyarakat, serta kegiatan civitas akademika yang berkegiatan di luar di mana kegiatan tersebut mencerminkan esensi dan nilai Bela Negara yang diusung oleh universitas terkait. Beberapa bukti juga masih memerlukan kelengkapan sebagai perwujudan implementasi nilai Bela Negara. Pemanfaatan fasilitas penunjang di kampus untuk disabilitas juga memerlukan perhatian dan peningkatan sehingga mencapai poin yang diinginkanS. Untuk mencapai poin yang lebih optimal, maka diperlukan evaluasi serta penetapan target capaian implementasi nilai – nila bela negara di segala lini, serta pemanfaatan sumber daya manusia yang ada secara optimal. Optimalisasi kegiatan dosen dan tenaga pendidik di bidang pengabdian masyarakat dan penelitian juga perlu dilakukan secara lebih optimal. Output yang diharapkan juga sebaiknya memiliki nilai keberlanjutan yang dampaknya bisa dirasakan oleh masyarakat luas secara berkelanjutan.";
 
         return [
             'penugasan' => $penugasan,

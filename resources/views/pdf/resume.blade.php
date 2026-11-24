@@ -343,7 +343,7 @@
                 CATATAN PENILAIAN
             </div>
             <div style="font-size: 13px; line-height: 1.62; text-align: justify; color: #111111; margin-top: 8px;">
-                {!! $catatan_penilaian !!}
+                {!! nl2br(e($catatan_penilaian)) !!}
             </div>
         </div>
     </div>

@@ -790,6 +790,7 @@ class PenugasanService extends BaseService
                 'total_skor_sistem' => $penugasan->total_skor_sistem,
                 'total_skor_akhir' => $penugasan->total_skor_akhir,
                 'tahun_periode' => $penugasan->tahun_periode,
+                'catatan_penilaian' => $penugasan->catatan_penilaian,
             ],
             'institusi' => $penugasan->institusi,
             'profil_peserta' => $identitas ? [
@@ -1233,7 +1234,7 @@ class PenugasanService extends BaseService
         return $count;
     }
 
-    public function finalizeReview($penugasan, string $reviewerKey)
+    public function finalizeReview($penugasan, string $reviewerKey, ?string $catatanPenilaian = null)
     {
         // Cek semua pertanyaan sudah ada skor dari reviewer ini
         $totalPertanyaan = $this->pertanyaanRepository->countTotalMandatoryQuestions();
@@ -1242,6 +1243,12 @@ class PenugasanService extends BaseService
         if ($totalDinilai < $totalPertanyaan) {
             $belum = $totalPertanyaan - $totalDinilai;
             throw new Exception("Finalisasi gagal: Masih ada {$belum} indikator yang belum Anda beri skor.", 422);
+        }
+
+        // Simpan catatan penilaian (executive summary) ke database
+        if ($catatanPenilaian !== null && trim($catatanPenilaian) !== '') {
+            $penugasan->catatan_penilaian = trim($catatanPenilaian);
+            $penugasan->save();
         }
 
         // Set status ke GRADED hanya jika semua reviewer yang ditugaskan telah memfinalisasi
