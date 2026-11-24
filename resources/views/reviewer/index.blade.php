@@ -46,7 +46,8 @@
                 });
                 if (!res.ok) {
                     if (res.status === 401) { window.location.href = '/masuk'; return; }
-                    throw new Error('Server error: ' + res.status);
+                    const errJson = await res.json().catch(() => null);
+                    throw new Error(errJson?.message || ('Server error: ' + res.status));
                 }
                 const json = await res.json();
                 if (json.success) {

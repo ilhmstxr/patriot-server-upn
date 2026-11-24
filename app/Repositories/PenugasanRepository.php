@@ -146,7 +146,7 @@ class PenugasanRepository extends BaseRepository
     public function isUserActive(int $userId): bool
     {
         $user = User::find($userId);
-        return $user && $user->status === 'ACTIVE';
+        return $user && strtoupper(trim((string)$user->status)) === 'ACTIVE';
     }
 
     public function getProfilePeserta(int $pesertaId)
