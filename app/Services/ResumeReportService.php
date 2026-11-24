@@ -40,54 +40,69 @@ class ResumeReportService
         $jmlTendik = $identitas?->jml_tendik ?? $institusi?->jml_tendik ?? 314;
         $jmlMahasiswa = $identitas?->jml_mahasiswa ?? $institusi?->jml_mahasiswa ?? 15134;
 
-        // 2. Map Jawaban Peserta & Skor R1
+        // 2. Map Jawaban Peserta — MURNI skor dari Reviewer ((R1 + R2) / 2), TIDAK mengambil skor_sistem peserta
         $jawabanMap = [];
         if ($penugasan->jawabans) {
             foreach ($penugasan->jawabans as $jawaban) {
                 $kode = $jawaban->pertanyaan?->kode_pertanyaan;
                 if ($kode) {
-                    $r1 = null;
+                    $r1 = 0.0;
+                    $r2 = 0.0;
+                    $skorRataRata = 0.0;
+
                     if (is_array($jawaban->skor_validasi_reviewer)) {
-                        $r1 = $jawaban->skor_validasi_reviewer['r1'] ?? null;
+                        $r1 = (isset($jawaban->skor_validasi_reviewer['r1']) && $jawaban->skor_validasi_reviewer['r1'] !== '' && is_numeric($jawaban->skor_validasi_reviewer['r1']))
+                            ? min(5.0, max(0.0, (float) $jawaban->skor_validasi_reviewer['r1']))
+                            : 0.0;
+                        $r2 = (isset($jawaban->skor_validasi_reviewer['r2']) && $jawaban->skor_validasi_reviewer['r2'] !== '' && is_numeric($jawaban->skor_validasi_reviewer['r2']))
+                            ? min(5.0, max(0.0, (float) $jawaban->skor_validasi_reviewer['r2']))
+                            : 0.0;
+
+                        // Rumus resmi: penjumlahan skor reviewer dibagi 2 -> (R1 + R2) / 2
+                        $skorRataRata = round(($r1 + $r2) / 2, 2);
                     } elseif (is_numeric($jawaban->skor_validasi_reviewer)) {
-                        $r1 = $jawaban->skor_validasi_reviewer;
+                        $r1 = min(5.0, max(0.0, (float) $jawaban->skor_validasi_reviewer));
+                        $skorRataRata = round($r1 / 2, 2);
                     }
 
-                    $skorSistem = $jawaban->skor_sistem ?? 0;
                     $jawabanMap[$kode] = [
-                        'skor_r1' => $r1 !== null ? (float)$r1 : (float)$skorSistem,
-                        'skor_sistem' => (float)$skorSistem,
-                        'jawaban' => $jawaban
+                        'skor_r1' => $r1,
+                        'skor_r2' => $r2,
+                        'skor_rata_rata' => $skorRataRata,
+                        'jawaban' => $jawaban,
                     ];
                 }
             }
         }
 
-        // 3. Proses Variabel 1: Patriotisme Kebijakan (A.1 - A.5 / 1.1 - 1.5)
+        // 3. Proses Variabel 1: Patriotisme Kebijakan (A.1 - A.5 / 1.1 - 1.5, bobot maks 20)
         $kebijakanData = $this->processKebijakan($jawabanMap);
 
-        // 4. Proses Variabel 2: Patriotisme Kelembagaan (B.1 - B.20 / 2.1 - 2.20)
+        // 4. Proses Variabel 2: Patriotisme Kelembagaan (B.1 - B.20 / 2.1 - 2.20, bobot maks 30)
         $kelembagaanData = $this->processKelembagaan($jawabanMap);
 
-        // 5. Proses Variabel 3: Patriotisme Mahasiswa (C.1 - C.15 / 3.1 - 3.15)
+        // 5. Proses Variabel 3: Patriotisme Mahasiswa (C.1 - C.15 / 3.1 - 3.15, bobot maks 50)
         $mahasiswaData = $this->processMahasiswa($jawabanMap);
 
-        // 6. Total Skor & Predikat Bintang
-        $totalSkor = round($kebijakanData['skor_saat_ini'] + $kelembagaanData['skor_saat_ini'] + $mahasiswaData['skor_saat_ini'], 2);
-        if ($totalSkor <= 0 && $penugasan->total_skor_akhir) {
-            $totalSkor = (float) $penugasan->total_skor_akhir;
-        } elseif ($totalSkor <= 0 && $penugasan->nilai_reviewer_1) {
-            $totalSkor = (float) $penugasan->nilai_reviewer_1;
-        }
+        // 6. Total Skor & Predikat Bintang (Maksimal 100, murni dari penjumlahan 3 variabel hasil reviewer / 2)
+        $totalSkor = min(100.0, round(
+            $kebijakanData['skor_saat_ini'] + $kelembagaanData['skor_saat_ini'] + $mahasiswaData['skor_saat_ini'],
+            2
+        ));
 
         $bintang = $this->calculateBintang($totalSkor);
 
-        // 7. Generate SVG Diagrams
-        $pieChartSvg = $this->renderPieChartSvg(
-            $kebijakanData['persentase'],
-            $kelembagaanData['persentase'],
-            $mahasiswaData['persentase']
-        );
+        // 7. Generate SVG Diagrams (Kontribusi tiap variabel terhadap total skor)
+        if ($totalSkor > 0) {
+            $contrib1 = (int) round(($kebijakanData['skor_saat_ini'] / $totalSkor) * 100);
+            $contrib2 = (int) round(($kelembagaanData['skor_saat_ini'] / $totalSkor) * 100);
+            $contrib3 = max(0, 100 - $contrib1 - $contrib2);
+        } else {
+            $contrib1 = 0;
+            $contrib2 = 0;
+            $contrib3 = 0;
+        }
+        $pieChartSvg = $this->renderPieChartSvg($contrib1, $contrib2, $contrib3);
 
         $radarKebijakanSvg = $this->renderRadarKebijakanSvg($kebijakanData['radar_scores']);
         $radarKelembagaanSvg = $this->renderRadarKelembagaanSvg($kelembagaanData['radar_scores']);
@@ -181,25 +196,31 @@ class ResumeReportService
         $indikators = [];
         $rawScores = [];
         $radarScores = [];
-        $totalSkor = 0;
+        $sumRaw = 0.0;
+        $jumlahIndikator = count($definisi); // 5 indikator
+        $skorMaksimal = 20;
+        $bobotPerIndikator = $skorMaksimal / $jumlahIndikator; // 4.00 poin maks per indikator
 
         foreach ($definisi as $kode => $meta) {
-            $skor = isset($jawabanMap[$kode]) ? $jawabanMap[$kode]['skor_r1'] : $meta['default'];
-            // Pastikan integer / float bersahabat
+            // Murni dari rata-rata reviewer (R1 + R2) / 2, default 0 jika belum dinilai
+            $avgRaw = isset($jawabanMap[$kode]) ? min(5.0, max(0.0, (float) $jawabanMap[$kode]['skor_rata_rata'])) : 0.0;
+            $skor = round(($avgRaw / 5.0) * $bobotPerIndikator, 2);
+
             $rawScores[] = $skor;
-            $radarScores[] = min(5, max(0, (float) $skor));
-            $totalSkor += $skor;
+            $radarScores[] = $avgRaw;
+            $sumRaw += $avgRaw;
 
             $indikators[] = [
                 'kode' => $kode,
                 'no' => $meta['no'],
                 'indikator' => $meta['judul'],
-                'skor' => (int) round($skor),
+                'skor' => number_format($skor, 2, ',', ''),
             ];
         }
 
-        $skorMaksimal = 20;
-        $persentase = $skorMaksimal > 0 ? (int) round(($totalSkor / $skorMaksimal) * 100) : 0;
+        // Total capaian tertimbang: (sumRaw / (5 * 5)) * 20, dijamin <= 20
+        $totalSkor = min((float) $skorMaksimal, round(($sumRaw / ($jumlahIndikator * 5.0)) * $skorMaksimal, 2));
+        $persentase = $skorMaksimal > 0 ? min(100, (int) round(($totalSkor / $skorMaksimal) * 100)) : 0;
 
         return [
             'nama' => 'VARIABEL 1: PATRIOTISME KEBIJAKAN',
@@ -243,34 +264,31 @@ class ResumeReportService
         $indikators = [];
         $rawScores = [];
         $radarScores = [];
-        $totalSkor = 0;
+        $sumRaw = 0.0;
+        $jumlahIndikator = count($definisi); // 20 indikator
+        $skorMaksimal = 30;
+        $bobotPerIndikator = $skorMaksimal / $jumlahIndikator; // 1.50 poin maks per indikator
 
         foreach ($definisi as $kode => $meta) {
-            if (isset($jawabanMap[$kode])) {
-                $raw = (float) $jawabanMap[$kode]['skor_r1'];
-                // Jika nilai mentah 0-5, konversi ke bobot 1.50
-                $skor = $raw <= 5 ? round(($raw / 5) * 1.50, 2) : round($raw, 2);
-                $radarVal = min(5, max(0, $raw <= 5 ? $raw : round(($raw / 1.50) * 5, 2)));
-            } else {
-                $skor = $meta['default'];
-                $radarVal = min(5, max(0, round(($skor / 1.50) * 5, 2)));
-            }
+            // Murni dari rata-rata reviewer (R1 + R2) / 2, default 0 jika belum dinilai
+            $avgRaw = isset($jawabanMap[$kode]) ? min(5.0, max(0.0, (float) $jawabanMap[$kode]['skor_rata_rata'])) : 0.0;
+            $skor = round(($avgRaw / 5.0) * $bobotPerIndikator, 2);
 
             $rawScores[] = $skor;
-            $radarScores[] = $radarVal;
-            $totalSkor += $skor;
+            $radarScores[] = $avgRaw;
+            $sumRaw += $avgRaw;
 
             $indikators[] = [
                 'kode' => $kode,
                 'no' => $meta['no'],
                 'indikator' => $meta['judul'],
-                'skor' => number_format($skor, 2, '.', ''),
+                'skor' => number_format($skor, 2, ',', ''),
             ];
         }
 
-        $skorMaksimal = 30;
-        $totalSkor = round($totalSkor, 2);
-        $persentase = $skorMaksimal > 0 ? (int) round(($totalSkor / $skorMaksimal) * 100) : 0;
+        // Total capaian tertimbang: (sumRaw / (20 * 5)) * 30, dijamin <= 30
+        $totalSkor = min((float) $skorMaksimal, round(($sumRaw / ($jumlahIndikator * 5.0)) * $skorMaksimal, 2));
+        $persentase = $skorMaksimal > 0 ? min(100, (int) round(($totalSkor / $skorMaksimal) * 100)) : 0;
 
         return [
             'nama' => 'VARIABEL 2: PATRIOTISME KELEMBAGAAN',
@@ -310,21 +328,19 @@ class ResumeReportService
         $indikators = [];
         $rawScores = [];
         $radarScores = [];
-        $totalSkor = 0;
+        $sumRaw = 0.0;
+        $jumlahIndikator = count($definisi); // 15 indikator
+        $skorMaksimal = 50;
+        $bobotPerIndikator = $skorMaksimal / $jumlahIndikator; // 3.3333... poin maks per indikator
 
         foreach ($definisi as $kode => $meta) {
-            if (isset($jawabanMap[$kode])) {
-                $raw = (float) $jawabanMap[$kode]['skor_r1'];
-                $skor = $raw <= 5 ? round(($raw / 5) * (50 / 15), 2) : round($raw, 2);
-                $radarVal = min(5, max(0, $raw <= 5 ? $raw : round(($raw / (50 / 15)) * 5, 2)));
-            } else {
-                $skor = $meta['default'];
-                $radarVal = min(5, max(0, round(($skor / (50 / 15)) * 5, 2)));
-            }
+            // Murni dari rata-rata reviewer (R1 + R2) / 2, default 0 jika belum dinilai
+            $avgRaw = isset($jawabanMap[$kode]) ? min(5.0, max(0.0, (float) $jawabanMap[$kode]['skor_rata_rata'])) : 0.0;
+            $skor = round(($avgRaw / 5.0) * $bobotPerIndikator, 2);
 
             $rawScores[] = $skor;
-            $radarScores[] = $radarVal;
-            $totalSkor += $skor;
+            $radarScores[] = $avgRaw;
+            $sumRaw += $avgRaw;
 
             $indikators[] = [
                 'kode' => $kode,
@@ -334,12 +350,12 @@ class ResumeReportService
             ];
         }
 
-        $skorMaksimal = 50;
-        $totalSkor = round($totalSkor, 2);
-        $persentase = $skorMaksimal > 0 ? (int) round(($totalSkor / $skorMaksimal) * 100) : 0;
+        // Total capaian tertimbang: (sumRaw / (15 * 5)) * 50, dijamin <= 50
+        $totalSkor = min((float) $skorMaksimal, round(($sumRaw / ($jumlahIndikator * 5.0)) * $skorMaksimal, 2));
+        $persentase = $skorMaksimal > 0 ? min(100, (int) round(($totalSkor / $skorMaksimal) * 100)) : 0;
 
         return [
-            'nama' => 'VARIABEL 2: PATRIOTISME MAHASISWA',
+            'nama' => 'VARIABEL 3: PATRIOTISME MAHASISWA',
             'skor_saat_ini' => $totalSkor,
             'skor_maksimal' => $skorMaksimal,
             'persentase' => $persentase,
@@ -388,19 +404,19 @@ class ResumeReportService
                 <text x="156" y="66" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="10.5" font-weight="bold" fill="#2d6d25">
                     <tspan x="156" dy="0">Patriotisme</tspan>
                     <tspan x="156" dy="14">Kebijakan</tspan>
-                    <tspan x="156" dy="14">30%</tspan>
+                    <tspan x="156" dy="14">{$pct1}%</tspan>
                 </text>
                 
                 <text x="64" y="66" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="10.5" font-weight="bold" fill="#2d6d25">
                     <tspan x="64" dy="0">Patriotisme</tspan>
                     <tspan x="64" dy="14">Kelembagaan</tspan>
-                    <tspan x="64" dy="14">30%</tspan>
+                    <tspan x="64" dy="14">{$pct2}%</tspan>
                 </text>
                 
                 <text x="110" y="138" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="10.5" font-weight="bold" fill="#2d6d25">
                     <tspan x="110" dy="0">Patriotisme</tspan>
                     <tspan x="110" dy="14">Mahasiswa</tspan>
-                    <tspan x="110" dy="14">40%</tspan>
+                    <tspan x="110" dy="14">{$pct3}%</tspan>
                 </text>
             </svg>
             <div style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: bold; color: #1a1a1a; text-align: center; margin-top: 6px; line-height: 1.4;">

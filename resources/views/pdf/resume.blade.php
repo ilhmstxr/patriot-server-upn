@@ -288,12 +288,12 @@
                         {{ $variabel_1['nama'] }}
                     </div>
                     <div class="progress-header">
-                        <span>Skor saat ini: {{ number_format($variabel_1['skor_saat_ini'], 0) }}</span>
+                        <span>Skor saat ini: {{ number_format($variabel_1['skor_saat_ini'], 2, ',', '.') }}</span>
                         <span>Skor maksimal: {{ $variabel_1['skor_maksimal'] }}</span>
                     </div>
                     <div class="progress-bar-wrap" style="background-color: #a8dca5;">
-                        <div class="progress-bar-fill" style="width: {{ $variabel_1['persentase'] }}%; background-color: #3b822d; color: #ffffff;">
-                            {{ $variabel_1['persentase'] }}%
+                        <div class="progress-bar-fill" style="width: {{ min(100, max(0, $variabel_1['persentase'])) }}%; background-color: #3b822d; color: #ffffff;">
+                            {{ min(100, max(0, $variabel_1['persentase'])) }}%
                         </div>
                     </div>
                 </div>
@@ -308,13 +308,13 @@
                         <span>Skor maksimal: {{ $variabel_2['skor_maksimal'] }}</span>
                     </div>
                     <div class="progress-bar-wrap" style="background-color: #f7bbb1;">
-                        <div class="progress-bar-fill" style="width: {{ $variabel_2['persentase'] }}%; background-color: #cc5d39; color: #ffffff;">
-                            {{ $variabel_2['persentase'] }}%
+                        <div class="progress-bar-fill" style="width: {{ min(100, max(0, $variabel_2['persentase'])) }}%; background-color: #cc5d39; color: #ffffff;">
+                            {{ min(100, max(0, $variabel_2['persentase'])) }}%
                         </div>
                     </div>
                 </div>
 
-                <!-- Variabel 3 (Labeled VARIABEL 2 in PDF) -->
+                <!-- Variabel 3 -->
                 <div class="progress-container" style="margin-bottom: 0;">
                     <div style="font-size: 13px; font-weight: bold; margin-bottom: 5px;">
                         {{ $variabel_3['nama'] }}
@@ -324,8 +324,8 @@
                         <span>Skor maksimal: {{ $variabel_3['skor_maksimal'] }}</span>
                     </div>
                     <div class="progress-bar-wrap" style="background-color: #fce899;">
-                        <div class="progress-bar-fill" style="width: {{ $variabel_3['persentase'] }}%; background-color: #eab318; color: #000000;">
-                            {{ $variabel_3['persentase'] }}%
+                        <div class="progress-bar-fill" style="width: {{ min(100, max(0, $variabel_3['persentase'])) }}%; background-color: #eab318; color: #000000;">
+                            {{ min(100, max(0, $variabel_3['persentase'])) }}%
                         </div>
                     </div>
                 </div>
