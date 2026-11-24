@@ -139,7 +139,13 @@ class DaftarNilaiResource extends Resource
                                 TextEntry::make('nilai_reviewer_3')->label('Nilai R3')->placeholder('0.00'),
                                 TextEntry::make('total_skor_akhir')->label('Nilai Final')->placeholder('0.00'),
                             ])->columns(2),
-                    ])
+                    ]),
+                Action::make('export_pdf')
+                    ->label('Export PDF')
+                    ->icon('heroicon-o-document-arrow-down')
+                    ->color('success')
+                    ->url(fn (Penugasan $record): string => route('penugasan.resume.pdf', $record->id))
+                    ->openUrlInNewTab(),
             ])
             ->recordActions([
                 Action::make('detail_nilai')
@@ -164,7 +170,13 @@ class DaftarNilaiResource extends Resource
                                 TextEntry::make('nilai_reviewer_3')->label('Nilai R3')->placeholder('0.00'),
                                 TextEntry::make('total_skor_akhir')->label('Nilai Final')->placeholder('0.00'),
                             ])->columns(2),
-                    ])
+                    ]),
+                Action::make('export_pdf')
+                    ->label('Export PDF')
+                    ->icon('heroicon-o-document-arrow-down')
+                    ->color('success')
+                    ->url(fn (Penugasan $record): string => route('penugasan.resume.pdf', $record->id))
+                    ->openUrlInNewTab(),
             ]);
     }
 
