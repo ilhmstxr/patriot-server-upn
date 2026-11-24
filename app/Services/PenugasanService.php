@@ -782,6 +782,8 @@ class PenugasanService extends BaseService
             ];
         }
 
+        $catatanMap = $this->parseCatatanPenilaian($penugasan->catatan_penilaian);
+
         return [
             'reviewer_key' => $reviewerKey,
             'Penugasan' => [
@@ -790,7 +792,7 @@ class PenugasanService extends BaseService
                 'total_skor_sistem' => $penugasan->total_skor_sistem,
                 'total_skor_akhir' => $penugasan->total_skor_akhir,
                 'tahun_periode' => $penugasan->tahun_periode,
-                'catatan_penilaian' => $penugasan->catatan_penilaian,
+                'catatan_penilaian' => $reviewerKey ? ($catatanMap[$reviewerKey] ?? null) : ($catatanMap['r1'] ?? $catatanMap['r2'] ?? null),
             ],
             'institusi' => $penugasan->institusi,
             'profil_peserta' => $identitas ? [
@@ -961,9 +963,30 @@ class PenugasanService extends BaseService
     }
 
     /**
+     * Helper to parse catatan_penilaian (supports JSON per-reviewer map or legacy plain string)
+     */
+    public function parseCatatanPenilaian(?string $raw): array
+    {
+        if ($raw === null || trim($raw) === '') {
+            return ['r1' => null, 'r2' => null, 'r3' => null];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded) && (array_key_exists('r1', $decoded) || array_key_exists('r2', $decoded) || array_key_exists('r3', $decoded))) {
+            return [
+                'r1' => !empty(trim((string) ($decoded['r1'] ?? ''))) ? trim((string) $decoded['r1']) : null,
+                'r2' => !empty(trim((string) ($decoded['r2'] ?? ''))) ? trim((string) $decoded['r2']) : null,
+                'r3' => !empty(trim((string) ($decoded['r3'] ?? ''))) ? trim((string) $decoded['r3']) : null,
+            ];
+        }
+
+        return ['r1' => trim($raw), 'r2' => null, 'r3' => null];
+    }
+
+    /**
      * Helper to safely format JSON jawaban_teks for display (Reviewer & Dashboard)
      */
-    private function formatJawabanTeksDisplay($teks): ?string
+    public function formatJawabanTeksDisplay($teks): ?string
     {
         if (empty($teks))
             return null;
@@ -1245,9 +1268,11 @@ class PenugasanService extends BaseService
             throw new Exception("Finalisasi gagal: Masih ada {$belum} indikator yang belum Anda beri skor.", 422);
         }
 
-        // Simpan catatan penilaian (executive summary) ke database
+        // Simpan catatan penilaian (executive summary) per reviewer ke database
         if ($catatanPenilaian !== null && trim($catatanPenilaian) !== '') {
-            $penugasan->catatan_penilaian = trim($catatanPenilaian);
+            $catatanMap = $this->parseCatatanPenilaian($penugasan->catatan_penilaian);
+            $catatanMap[$reviewerKey] = trim($catatanPenilaian);
+            $penugasan->catatan_penilaian = json_encode($catatanMap, JSON_UNESCAPED_UNICODE);
             $penugasan->save();
         }
 

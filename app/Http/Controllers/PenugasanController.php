@@ -244,29 +244,48 @@ class PenugasanController extends Controller
      */
     public function getAdminPenugasanDetail($id)
     {
-        $penugasan = \App\Models\Penugasan::with(['institusi', 'identitas.agamas', 'jawabans.pertanyaan', 'jawabans.jawabanOpsi', 'user'])->findOrFail($id);
+        $penugasan = \App\Models\Penugasan::with([
+            'institusi',
+            'identitas.agamas',
+            'jawabans.pertanyaan',
+            'jawabans.jawabanOpsi',
+            'user',
+            'reviewer1',
+            'reviewer2',
+            'reviewer3',
+        ])->findOrFail($id);
         $service = $this->PenugasanService;
-
-        $reviewerId = $penugasan->reviewer_1_id ?? $penugasan->reviewer_2_id ?? $penugasan->reviewer_3_id;
-        if ($reviewerId) {
-            try {
-                $result = $service->getDetailReviewTasks($reviewerId, $id);
-                return response()->json(['success' => true, 'data' => $result]);
-            } catch (\Throwable $e) {}
-        }
 
         $allPertanyaan = app(\App\Repositories\PertanyaanRepository::class)->getPertanyaanWithOpsiJawaban();
         $identitas = $penugasan->identitas;
+        $catatanMap = $service->parseCatatanPenilaian($penugasan->catatan_penilaian);
 
         $jawabanMap = [];
         foreach ($penugasan->jawabans as $jawaban) {
+            $scoresArr = is_array($jawaban->skor_validasi_reviewer)
+                ? $jawaban->skor_validasi_reviewer
+                : ['r1' => $jawaban->skor_validasi_reviewer, 'r2' => null, 'r3' => null];
+            $notesArr = is_array($jawaban->note_reviewer)
+                ? $jawaban->note_reviewer
+                : ['r1' => $jawaban->note_reviewer, 'r2' => null, 'r3' => null];
+
+            $skorR1 = (isset($scoresArr['r1']) && $scoresArr['r1'] !== '') ? (int) $scoresArr['r1'] : null;
+            $skorR2 = (isset($scoresArr['r2']) && $scoresArr['r2'] !== '') ? (int) $scoresArr['r2'] : null;
+            $skorR3 = (isset($scoresArr['r3']) && $scoresArr['r3'] !== '') ? (int) $scoresArr['r3'] : null;
+
             $jawabanMap[$jawaban->pertanyaan_id] = [
                 'jawaban_id' => $jawaban->jawaban_id,
-                'jawaban_teks' => $jawaban->jawaban_teks,
+                'jawaban_teks' => $service->formatJawabanTeksDisplay($jawaban->jawaban_teks),
                 'tautan_bukti_drive' => $jawaban->tautan_bukti_drive,
                 'skor_sistem' => $jawaban->skor_sistem,
-                'skor_validasi_reviewer' => $jawaban->skor_validasi_reviewer,
-                'note_reviewer' => $jawaban->note_reviewer,
+                'skor_validasi_reviewer' => $jawaban->resolved_reviewer_score,
+                'skor_r1' => $skorR1,
+                'skor_r2' => $skorR2,
+                'skor_r3' => $skorR3,
+                'note_reviewer' => $notesArr['r1'] ?? $notesArr['r2'] ?? null,
+                'note_r1' => $notesArr['r1'] ?? null,
+                'note_r2' => $notesArr['r2'] ?? null,
+                'note_r3' => $notesArr['r3'] ?? null,
                 'opsi_dipilih' => $jawaban->jawabanOpsi ? [
                     'id' => $jawaban->jawabanOpsi->id,
                     'opsi_jawaban' => $jawaban->jawabanOpsi->opsi_jawaban,
@@ -320,7 +339,20 @@ class PenugasanController extends Controller
                 'status' => $penugasan->status,
                 'total_skor_sistem' => $penugasan->total_skor_sistem,
                 'total_skor_akhir' => $penugasan->total_skor_akhir,
+                'nilai_reviewer_1' => $penugasan->nilai_reviewer_1,
+                'nilai_reviewer_2' => $penugasan->nilai_reviewer_2,
+                'nilai_reviewer_3' => $penugasan->nilai_reviewer_3,
+                'nilai_rata_rata' => $penugasan->nilai_rata_rata,
+                'reviewer_1_id' => $penugasan->reviewer_1_id,
+                'reviewer_2_id' => $penugasan->reviewer_2_id,
+                'reviewer_3_id' => $penugasan->reviewer_3_id,
+                'reviewer_1_name' => $penugasan->reviewer1?->nama_lengkap,
+                'reviewer_2_name' => $penugasan->reviewer2?->nama_lengkap,
+                'reviewer_3_name' => $penugasan->reviewer3?->nama_lengkap,
                 'tahun_periode' => $penugasan->tahun_periode,
+                'catatan_penilaian' => $catatanMap['r1'] ?? $catatanMap['r2'] ?? null,
+                'catatan_penilaian_r1' => $catatanMap['r1'] ?? null,
+                'catatan_penilaian_r2' => $catatanMap['r2'] ?? null,
             ],
             'institusi' => $penugasan->institusi,
             'profil_peserta' => $identitas ? [

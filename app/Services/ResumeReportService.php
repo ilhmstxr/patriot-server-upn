@@ -89,14 +89,22 @@ class ResumeReportService
             $mahasiswaData['persentase']
         );
 
-        $radarKebijakanSvg = $this->renderRadarKebijakanSvg($kebijakanData['raw_scores']);
-        $radarKelembagaanSvg = $this->renderRadarKelembagaanSvg($kelembagaanData['raw_scores']);
-        $radarMahasiswaSvg = $this->renderRadarMahasiswaSvg($mahasiswaData['raw_scores']);
+        $radarKebijakanSvg = $this->renderRadarKebijakanSvg($kebijakanData['radar_scores']);
+        $radarKelembagaanSvg = $this->renderRadarKelembagaanSvg($kelembagaanData['radar_scores']);
+        $radarMahasiswaSvg = $this->renderRadarMahasiswaSvg($mahasiswaData['radar_scores']);
 
         // 8. Catatan Penilaian / Executive Summary
-        $catatanPenilaian = !empty(trim($penugasan->catatan_penilaian ?? '')) 
-            ? $penugasan->catatan_penilaian 
-            : "Penerapan indikator implementasi {$namaInstitusi} secara umum memerlukan improvisasi di poin penelitian, pengabdian masyarakat, serta kegiatan civitas akademika yang berkegiatan di luar di mana kegiatan tersebut mencerminkan esensi dan nilai Bela Negara yang diusung oleh universitas terkait. Beberapa bukti juga masih memerlukan kelengkapan sebagai perwujudan implementasi nilai Bela Negara. Pemanfaatan fasilitas penunjang di kampus untuk disabilitas juga memerlukan perhatian dan peningkatan sehingga mencapai poin yang diinginkanS. Untuk mencapai poin yang lebih optimal, maka diperlukan evaluasi serta penetapan target capaian implementasi nilai – nila bela negara di segala lini, serta pemanfaatan sumber daya manusia yang ada secara optimal. Optimalisasi kegiatan dosen dan tenaga pendidik di bidang pengabdian masyarakat dan penelitian juga perlu dilakukan secara lebih optimal. Output yang diharapkan juga sebaiknya memiliki nilai keberlanjutan yang dampaknya bisa dirasakan oleh masyarakat luas secara berkelanjutan.";
+        $rawCatatan = trim($penugasan->catatan_penilaian ?? '');
+        $resolvedCatatan = '';
+        if ($rawCatatan !== '') {
+            $decodedCatatan = json_decode($rawCatatan, true);
+            if (is_array($decodedCatatan) && (array_key_exists('r1', $decodedCatatan) || array_key_exists('r2', $decodedCatatan))) {
+                $resolvedCatatan = trim((string) ($decodedCatatan['r1'] ?? '')) ?: trim((string) ($decodedCatatan['r2'] ?? ''));
+            } else {
+                $resolvedCatatan = $rawCatatan;
+            }
+        }
+        $catatanPenilaian = $resolvedCatatan !== '' ? $resolvedCatatan : null;
 
         return [
             'penugasan' => $penugasan,
@@ -172,12 +180,14 @@ class ResumeReportService
 
         $indikators = [];
         $rawScores = [];
+        $radarScores = [];
         $totalSkor = 0;
 
         foreach ($definisi as $kode => $meta) {
             $skor = isset($jawabanMap[$kode]) ? $jawabanMap[$kode]['skor_r1'] : $meta['default'];
             // Pastikan integer / float bersahabat
             $rawScores[] = $skor;
+            $radarScores[] = min(5, max(0, (float) $skor));
             $totalSkor += $skor;
 
             $indikators[] = [
@@ -198,6 +208,7 @@ class ResumeReportService
             'persentase' => $persentase,
             'indikators' => $indikators,
             'raw_scores' => $rawScores,
+            'radar_scores' => $radarScores,
         ];
     }
 
@@ -231,18 +242,22 @@ class ResumeReportService
 
         $indikators = [];
         $rawScores = [];
+        $radarScores = [];
         $totalSkor = 0;
 
         foreach ($definisi as $kode => $meta) {
             if (isset($jawabanMap[$kode])) {
-                $raw = $jawabanMap[$kode]['skor_r1'];
+                $raw = (float) $jawabanMap[$kode]['skor_r1'];
                 // Jika nilai mentah 0-5, konversi ke bobot 1.50
                 $skor = $raw <= 5 ? round(($raw / 5) * 1.50, 2) : round($raw, 2);
+                $radarVal = min(5, max(0, $raw <= 5 ? $raw : round(($raw / 1.50) * 5, 2)));
             } else {
                 $skor = $meta['default'];
+                $radarVal = min(5, max(0, round(($skor / 1.50) * 5, 2)));
             }
 
             $rawScores[] = $skor;
+            $radarScores[] = $radarVal;
             $totalSkor += $skor;
 
             $indikators[] = [
@@ -265,6 +280,7 @@ class ResumeReportService
             'indikators_left' => array_slice($indikators, 0, 12),
             'indikators_right' => array_slice($indikators, 12, 8),
             'raw_scores' => $rawScores,
+            'radar_scores' => $radarScores,
         ];
     }
 
@@ -293,17 +309,21 @@ class ResumeReportService
 
         $indikators = [];
         $rawScores = [];
+        $radarScores = [];
         $totalSkor = 0;
 
         foreach ($definisi as $kode => $meta) {
             if (isset($jawabanMap[$kode])) {
-                $raw = $jawabanMap[$kode]['skor_r1'];
+                $raw = (float) $jawabanMap[$kode]['skor_r1'];
                 $skor = $raw <= 5 ? round(($raw / 5) * (50 / 15), 2) : round($raw, 2);
+                $radarVal = min(5, max(0, $raw <= 5 ? $raw : round(($raw / (50 / 15)) * 5, 2)));
             } else {
                 $skor = $meta['default'];
+                $radarVal = min(5, max(0, round(($skor / (50 / 15)) * 5, 2)));
             }
 
             $rawScores[] = $skor;
+            $radarScores[] = $radarVal;
             $totalSkor += $skor;
 
             $indikators[] = [
@@ -325,6 +345,7 @@ class ResumeReportService
             'persentase' => $persentase,
             'indikators' => $indikators,
             'raw_scores' => $rawScores,
+            'radar_scores' => $radarScores,
         ];
     }
 
@@ -390,7 +411,7 @@ class ResumeReportService
     }
 
     /**
-     * Render SVG Radar Patriotisme Kebijakan (5 sumbu).
+     * Render SVG Radar Patriotisme Kebijakan (5 sumbu, 1 titik pusat = 0, 5 garis = 1..5).
      */
     public function renderRadarKebijakanSvg(array $vals): string
     {
@@ -402,6 +423,7 @@ class ResumeReportService
         $angleStep = (2 * M_PI) / $num;
         $startRad = -M_PI / 2;
 
+        // 5 garis konsentris (1 = paling dekat titik pusat, ..., 5 = terluar)
         $gridSvg = '';
         foreach ($levels as $lvl) {
             $lvlR = ($lvl / $maxVal) * $r;
@@ -412,6 +434,9 @@ class ResumeReportService
             }
             $gridSvg .= '<polygon points="' . implode(' ', $pts) . '" fill="none" stroke="#cad8c8" stroke-width="1.2" />' . "\n";
         }
+
+        // 1 titik pusat (menandakan skor 0)
+        $centerDotSvg = "<circle cx=\"{$cx}\" cy=\"{$cy}\" r=\"2.2\" fill=\"#7a8f77\" />\n";
 
         $spokesSvg = '';
         $labelsSvg = '';
@@ -427,17 +452,17 @@ class ResumeReportService
             $labelsSvg .= "<text x=\"{$lx}\" y=\"{$ly}\" text-anchor=\"{$anchor}\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"13\" font-weight=\"bold\" fill=\"#111\">{$labels[$i]}</text>\n";
         }
 
-        $levelNumbersSvg = "<text x=\"" . ($cx - 14) . "\" y=\"" . ($cy + 4) . "\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"11.5\" font-weight=\"bold\" fill=\"#555\">0</text>\n";
+        $levelNumbersSvg = "<text x=\"" . ($cx - 14) . "\" y=\"" . ($cy + 4) . "\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"11\" font-weight=\"bold\" fill=\"#555\">0</text>\n";
         foreach ($levels as $lvl) {
             $lvlR = ($lvl / $maxVal) * $r;
             $y = round($cy - $lvlR + 4, 1);
-            $levelNumbersSvg .= "<text x=\"" . ($cx - 14) . "\" y=\"{$y}\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"11.5\" font-weight=\"bold\" fill=\"#555\">{$lvl}</text>\n";
+            $levelNumbersSvg .= "<text x=\"" . ($cx - 14) . "\" y=\"{$y}\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"11\" font-weight=\"bold\" fill=\"#555\">{$lvl}</text>\n";
         }
 
         $polyPts = [];
         $dotsSvg = '';
         for ($i = 0; $i < $num; $i++) {
-            $v = $vals[$i] ?? 0;
+            $v = min($maxVal, max(0, (float) ($vals[$i] ?? 0)));
             $a = $startRad + $i * $angleStep;
             $dist = ($v / $maxVal) * $r;
             $px = round($cx + $dist * cos($a), 1);
@@ -455,6 +480,7 @@ class ResumeReportService
             <svg width="320" height="300" viewBox="0 0 320 300">
                 {$gridSvg}
                 {$spokesSvg}
+                {$centerDotSvg}
                 {$levelNumbersSvg}
                 <polygon points="{$polygonPoints}" fill="rgba(45, 109, 37, 0.15)" stroke="#2d6d25" stroke-width="2.6" />
                 {$dotsSvg}
@@ -465,21 +491,22 @@ class ResumeReportService
     }
 
     /**
-     * Render SVG Radar Patriotisme Kelembagaan (20 sumbu).
+     * Render SVG Radar Patriotisme Kelembagaan (20 sumbu, 1 titik pusat = 0, 5 garis = 1..5).
      */
     public function renderRadarKelembagaanSvg(array $vals): string
     {
         $cx = 150; $cy = 142; $r = 88;
         $num = 20;
-        $maxVal = 1.5;
+        $maxVal = 5;
         $labels = [
             '2.1.', '2.2.', '2.3.', '2.4.', '2.5.', '2.6.', '2.7.', '2.8.', '2.9.', '2.10.',
             '2.11.', '2.12.', '2.13.', '2.14.', '2.15.', '2.16.', '2.17.', '2.18.', '2.19.', '2.20.'
         ];
-        $levels = [0.5, 1.0, 1.5];
+        $levels = [1, 2, 3, 4, 5];
         $angleStep = (2 * M_PI) / $num;
         $startRad = -M_PI / 2;
 
+        // 5 garis konsentris (1 = paling dekat titik pusat, ..., 5 = terluar)
         $gridSvg = '';
         foreach ($levels as $lvl) {
             $lvlR = ($lvl / $maxVal) * $r;
@@ -490,6 +517,9 @@ class ResumeReportService
             }
             $gridSvg .= '<polygon points="' . implode(' ', $pts) . '" fill="none" stroke="#e0cfc7" stroke-width="1" />' . "\n";
         }
+
+        // 1 titik pusat (menandakan skor 0)
+        $centerDotSvg = "<circle cx=\"{$cx}\" cy=\"{$cy}\" r=\"2.2\" fill=\"#a88c7f\" />\n";
 
         $spokesSvg = '';
         $labelsSvg = '';
@@ -505,20 +535,18 @@ class ResumeReportService
             $labelsSvg .= "<text x=\"{$lx}\" y=\"{$ly}\" text-anchor=\"{$anchor}\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"10.5\" font-weight=\"bold\" fill=\"#111\">{$labels[$i]}</text>\n";
         }
 
-        $scaleA = $startRad - $angleStep * 1.5;
-        $levelNumbersSvg = "<text x=\"" . ($cx - 8) . "\" y=\"" . ($cy + 4) . "\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"10.5\" font-weight=\"bold\" fill=\"#555\">0</text>\n";
-        foreach ($levels as $idx => $lvl) {
+        // Angka skala 0 (pusat) hingga 5 (garis terluar)
+        $levelNumbersSvg = "<text x=\"" . ($cx - 11) . "\" y=\"" . ($cy + 3.5) . "\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"9.5\" font-weight=\"bold\" fill=\"#555\">0</text>\n";
+        foreach ($levels as $lvl) {
             $lvlR = ($lvl / $maxVal) * $r;
-            $lx = round($cx + $lvlR * cos($scaleA), 1);
-            $ly = round($cy + $lvlR * sin($scaleA), 1);
-            $txt = $idx === 0 ? '0,5' : ($idx === 1 ? '1' : '1,5');
-            $levelNumbersSvg .= "<text x=\"{$lx}\" y=\"{$ly}\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"10.5\" font-weight=\"bold\" fill=\"#555\">{$txt}</text>\n";
+            $y = round($cy - $lvlR + 3.5, 1);
+            $levelNumbersSvg .= "<text x=\"" . ($cx - 11) . "\" y=\"{$y}\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"9.5\" font-weight=\"bold\" fill=\"#555\">{$lvl}</text>\n";
         }
 
         $polyPts = [];
         $dotsSvg = '';
         for ($i = 0; $i < $num; $i++) {
-            $v = $vals[$i] ?? 0;
+            $v = min($maxVal, max(0, (float) ($vals[$i] ?? 0)));
             $a = $startRad + $i * $angleStep;
             $dist = ($v / $maxVal) * $r;
             $px = round($cx + $dist * cos($a), 1);
@@ -536,6 +564,7 @@ class ResumeReportService
             <svg width="300" height="285" viewBox="0 0 300 285">
                 {$gridSvg}
                 {$spokesSvg}
+                {$centerDotSvg}
                 {$levelNumbersSvg}
                 <polygon points="{$polygonPoints}" fill="rgba(223, 105, 42, 0.15)" stroke="#df692a" stroke-width="2.3" />
                 {$dotsSvg}
@@ -546,26 +575,35 @@ class ResumeReportService
     }
 
     /**
-     * Render SVG Radar Patriotisme Mahasiswa (15 sumbu).
+     * Render SVG Radar Patriotisme Mahasiswa (15 sumbu, 1 titik pusat = 0, 5 garis = 1..5).
      */
     public function renderRadarMahasiswaSvg(array $vals): string
     {
         $cx = 150; $cy = 145; $r = 92;
         $num = 15;
-        $maxVal = 3.5;
+        $maxVal = 5;
         $labels = [
             '3.1.', '3.2.', '3.3.', '3.4.', '3.5.', '3.6.', '3.7.', '3.8.', '3.9.', '3.10',
             '3.11.', '3.12.', '3.13.', '3.14.', '3.15.'
         ];
-        $levels = [1.0, 2.0, 3.0, 3.5];
+        $levels = [1, 2, 3, 4, 5];
         $angleStep = (2 * M_PI) / $num;
         $startRad = -M_PI / 2;
 
+        // 5 garis konsentris (1 = paling dekat titik pusat, ..., 5 = terluar)
         $gridSvg = '';
         foreach ($levels as $lvl) {
-            $lvlR = round(($lvl / $maxVal) * $r, 1);
-            $gridSvg .= "<circle cx=\"{$cx}\" cy=\"{$cy}\" r=\"{$lvlR}\" fill=\"none\" stroke=\"#edd9b8\" stroke-width=\"1\" />\n";
+            $lvlR = ($lvl / $maxVal) * $r;
+            $pts = [];
+            for ($i = 0; $i < $num; $i++) {
+                $a = $startRad + $i * $angleStep;
+                $pts[] = round($cx + $lvlR * cos($a), 1) . ',' . round($cy + $lvlR * sin($a), 1);
+            }
+            $gridSvg .= '<polygon points="' . implode(' ', $pts) . '" fill="none" stroke="#edd9b8" stroke-width="1" />' . "\n";
         }
+
+        // 1 titik pusat (menandakan skor 0)
+        $centerDotSvg = "<circle cx=\"{$cx}\" cy=\"{$cy}\" r=\"2.2\" fill=\"#b89b6a\" />\n";
 
         $spokesSvg = '';
         $labelsSvg = '';
@@ -581,10 +619,18 @@ class ResumeReportService
             $labelsSvg .= "<text x=\"{$lx}\" y=\"{$ly}\" text-anchor=\"{$anchor}\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"11.5\" font-weight=\"bold\" fill=\"#111\">{$labels[$i]}</text>\n";
         }
 
+        // Angka skala 0 (pusat) hingga 5 (garis terluar)
+        $levelNumbersSvg = "<text x=\"" . ($cx - 12) . "\" y=\"" . ($cy + 3.5) . "\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"10\" font-weight=\"bold\" fill=\"#555\">0</text>\n";
+        foreach ($levels as $lvl) {
+            $lvlR = ($lvl / $maxVal) * $r;
+            $y = round($cy - $lvlR + 3.5, 1);
+            $levelNumbersSvg .= "<text x=\"" . ($cx - 12) . "\" y=\"{$y}\" font-family=\"Arial, Helvetica, sans-serif\" font-size=\"10\" font-weight=\"bold\" fill=\"#555\">{$lvl}</text>\n";
+        }
+
         $polyPts = [];
         $dotsSvg = '';
         for ($i = 0; $i < $num; $i++) {
-            $v = $vals[$i] ?? 0;
+            $v = min($maxVal, max(0, (float) ($vals[$i] ?? 0)));
             $a = $startRad + $i * $angleStep;
             $dist = ($v / $maxVal) * $r;
             $px = round($cx + $dist * cos($a), 1);
@@ -602,6 +648,8 @@ class ResumeReportService
             <svg width="310" height="300" viewBox="0 0 310 300">
                 {$gridSvg}
                 {$spokesSvg}
+                {$centerDotSvg}
+                {$levelNumbersSvg}
                 <polygon points="{$polygonPoints}" fill="rgba(229, 152, 0, 0.15)" stroke="#e59800" stroke-width="2.6" />
                 {$dotsSvg}
                 {$labelsSvg}

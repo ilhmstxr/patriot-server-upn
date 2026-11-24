@@ -13,6 +13,8 @@
         isLocking: false,
         showLockConfirm: false,
         catatan_penilaian: '',
+        catatan_penilaian_r1: '',
+        catatan_penilaian_r2: '',
         konfirmasi_catatan: false,
         pesertaId: {{ $reqId }},
         
@@ -34,6 +36,10 @@
         // Data Penilaian Reviewer
         reviewerScores: {},
         reviewerNotes: {},
+        reviewerScoresR1: {},
+        reviewerScoresR2: {},
+        reviewerNotesR1: {},
+        reviewerNotesR2: {},
         unlockedQuestions: {},
 
         // Antrean FIFO Penyimpanan Skor Reviewer (Client-Side)
@@ -218,7 +224,7 @@
         },
 
         getCacheKey() {
-            return (this.adminReadonly ? 'admin_detail_cache_v2_' : 'reviewer_detail_cache_v2_') + this.pesertaId;
+            return (this.adminReadonly ? 'admin_detail_cache_v3_' : 'reviewer_detail_cache_v2_') + this.pesertaId;
         },
 
         getPendingEditsKey() {
@@ -352,13 +358,35 @@
             this.drawerOpen = false;
         },
 
+        hasScoreValue(val) {
+            return val !== null && val !== undefined && val !== '' && !isNaN(val);
+        },
+
+        hasReviewerScoreR1(qId) {
+            return this.hasScoreValue(this.reviewerScoresR1[qId]);
+        },
+
+        hasReviewerScoreR2(qId) {
+            return this.hasScoreValue(this.reviewerScoresR2[qId]);
+        },
+
         // Cek apakah reviewer sudah mengisi skor untuk pertanyaan tertentu
         hasReviewerScore(qId) {
-            const score = this.reviewerScores[qId];
-            return score !== null && score !== undefined && score !== '' && !isNaN(score);
+            if (this.adminReadonly) {
+                return this.hasReviewerScoreR1(qId) || this.hasReviewerScoreR2(qId) || this.hasScoreValue(this.reviewerScores[qId]);
+            }
+            return this.hasScoreValue(this.reviewerScores[qId]);
         },
 
         fillStatus(qId) {
+            if (this.adminReadonly) {
+                const hasR1 = this.hasReviewerScoreR1(qId);
+                const hasR2 = this.hasReviewerScoreR2(qId);
+                const r2Assigned = !!(this.Penugasan && (this.Penugasan.reviewer_2_id || this.Penugasan.reviewer_2_name));
+                if (hasR1 && (hasR2 || !r2Assigned)) return 2;
+                if (hasR1 || hasR2) return 1;
+                return 0;
+            }
             const hasScore = this.hasReviewerScore(qId);
             const note  = this.reviewerNotes[qId];
             const hasNote  = !!(note && String(note).trim() !== '');
@@ -371,6 +399,18 @@
         },
         get totalQuestions() {
             return this.allQuestions.length;
+        },
+        get totalScoredCountR1() {
+            return this.allQuestions.filter(q => this.hasReviewerScoreR1(q.id)).length;
+        },
+        get totalScoredCountR2() {
+            return this.allQuestions.filter(q => this.hasReviewerScoreR2(q.id)).length;
+        },
+        get progressPercentageR1() {
+            return this.totalQuestions > 0 ? Math.round((this.totalScoredCountR1 / this.totalQuestions) * 100) : 0;
+        },
+        get progressPercentageR2() {
+            return this.totalQuestions > 0 ? Math.round((this.totalScoredCountR2 / this.totalQuestions) * 100) : 0;
         },
         get totalScoredCount() {
             return this.allQuestions.filter(q => this.hasReviewerScore(q.id)).length;
@@ -405,12 +445,30 @@
         get hasilCategories() {
             return this.rubrikData.map(cat => {
                 let items = cat.pertanyaan.map(q => {
+                    let hasR1 = this.hasReviewerScoreR1(q.id);
+                    let hasR2 = this.hasReviewerScoreR2(q.id);
+                    let scoreR1 = hasR1 ? parseInt(this.reviewerScoresR1[q.id], 10) : null;
+                    let scoreR2 = hasR2 ? parseInt(this.reviewerScoresR2[q.id], 10) : null;
+
                     let hasScore = this.hasReviewerScore(q.id);
-                    let revScore = hasScore ? parseInt(this.reviewerScores[q.id], 10) : 0;
+                    let revScore = 0;
+                    if (this.adminReadonly) {
+                        if (hasR1 && hasR2) {
+                            revScore = Math.round(((scoreR1 + scoreR2) / 2) * 100) / 100;
+                        } else if (hasR1) {
+                            revScore = scoreR1;
+                        } else if (hasR2) {
+                            revScore = scoreR2;
+                        } else if (this.hasScoreValue(this.reviewerScores[q.id])) {
+                            revScore = Number(this.reviewerScores[q.id]);
+                        }
+                    } else {
+                        revScore = hasScore ? parseInt(this.reviewerScores[q.id], 10) : 0;
+                    }
                     
                     let jawabanText = this.answers[q.id] || 'Belum diisi';
                     try {
-                        const parsed = JSON.parse(jawabanText);
+                        const parsed = typeof jawabanText === 'object' ? jawabanText : JSON.parse(jawabanText);
                         if (parsed && typeof parsed === 'object') {
                             if (parsed.calculated_percentage !== undefined) {
                                 jawabanText = `Input: ${parsed.raw_input || '-'} | Sistem: ${parsed.calculated_percentage}% ${parsed.label || ''}`;
@@ -429,37 +487,69 @@
                         no: q.kode_pertanyaan,
                         title: q.teks_pertanyaan,
                         score: displayScore,
+                        score_r1: scoreR1,
+                        score_r2: scoreR2,
+                        has_score_r1: hasR1,
+                        has_score_r2: hasR2,
                         max: 5,
                         jawaban: jawabanText,
                         tautan: this.links[q.id] || '',
                         catatan: this.reviewerNotes[q.id] || (q.jawaban_peserta?.note_reviewer || ''),
+                        catatan_r1: this.reviewerNotesR1[q.id] || '',
+                        catatan_r2: this.reviewerNotesR2[q.id] || '',
                         has_score: hasScore,
                         is_validated: hasScore
                     };
                 });
 
                 let scoredItems = items.filter(item => item.has_score);
+                let scoredItemsR1 = items.filter(item => item.has_score_r1);
+                let scoredItemsR2 = items.filter(item => item.has_score_r2);
                 let scoredCount = scoredItems.length;
+                let scoredCountR1 = scoredItemsR1.length;
+                let scoredCountR2 = scoredItemsR2.length;
                 let totalItemsCount = items.length;
                 let isCategoryComplete = totalItemsCount > 0 && scoredCount >= totalItemsCount;
                 let isCategoryEmpty = scoredCount === 0;
 
                 // Total skor akumulasi reviewer di kategori ini
                 let totalScore = scoredItems.reduce((sum, item) => sum + item.score, 0);
+                let totalScoreR1 = scoredItemsR1.reduce((sum, item) => sum + (item.score_r1 || 0), 0);
+                let totalScoreR2 = scoredItemsR2.reduce((sum, item) => sum + (item.score_r2 || 0), 0);
                 let maxScore = totalItemsCount * 5;
                 let bobot = cat.bobot_persentase || 0;
 
                 // Perhitungan capaian skor per kategori langsung aktif real-time saat pengisian
                 // Rumus identik dengan backend PenugasanService::recapAndSaveSkor: round((totalScore / maxScore) * bobot, 2)
                 let capaianSkor = maxScore > 0 ? Math.round(((totalScore / maxScore) * bobot) * 100) / 100 : 0;
+                let capaianR1 = maxScore > 0 ? Math.round(((totalScoreR1 / maxScore) * bobot) * 100) / 100 : 0;
+                let capaianR2 = maxScore > 0 ? Math.round(((totalScoreR2 / maxScore) * bobot) * 100) / 100 : 0;
+
+                if (this.adminReadonly) {
+                    if (scoredCountR1 > 0 && scoredCountR2 > 0) {
+                        capaianSkor = Math.round(((capaianR1 + capaianR2) / 2) * 100) / 100;
+                    } else if (scoredCountR1 > 0) {
+                        capaianSkor = capaianR1;
+                    } else if (scoredCountR2 > 0) {
+                        capaianSkor = capaianR2;
+                    } else {
+                        capaianSkor = 0;
+                    }
+                }
 
                 return {
                     name: cat.kategori,
                     score: totalScore,
+                    score_r1: totalScoreR1,
+                    score_r2: totalScoreR2,
                     max: maxScore,
                     bobot: bobot,
                     capaian_skor: capaianSkor,
+                    capaian_r1: capaianR1,
+                    capaian_r2: capaianR2,
                     scored_count: scoredCount,
+                    scored_count_r1: scoredCountR1,
+                    scored_count_r2: scoredCountR2,
                     total_count: totalItemsCount,
                     is_complete: isCategoryComplete,
                     is_empty: isCategoryEmpty,
@@ -470,7 +560,18 @@
         get hasilTotalScore() {
             return this.hasilCategories.reduce((sum, cat) => sum + cat.score, 0);
         },
+        get hasilTotalCapaianR1() {
+            const total = this.hasilCategories.reduce((sum, cat) => sum + (cat.capaian_r1 || 0), 0);
+            return Math.min(100, Math.round(total * 100) / 100);
+        },
+        get hasilTotalCapaianR2() {
+            const total = this.hasilCategories.reduce((sum, cat) => sum + (cat.capaian_r2 || 0), 0);
+            return Math.min(100, Math.round(total * 100) / 100);
+        },
         get hasilTotalCapaian() {
+            if (this.adminReadonly && this.Penugasan && this.Penugasan.total_skor_akhir !== null && this.Penugasan.total_skor_akhir !== undefined && Number(this.Penugasan.total_skor_akhir) > 0) {
+                return Math.min(100, Math.round(Number(this.Penugasan.total_skor_akhir) * 100) / 100);
+            }
             if (this.isNoneScored) return 0;
             const total = this.hasilCategories.reduce((sum, cat) => sum + cat.capaian_skor, 0);
             return Math.min(100, Math.round(total * 100) / 100);
@@ -765,6 +866,8 @@
             if (this.Penugasan && this.Penugasan.catatan_penilaian) {
                 this.catatan_penilaian = this.Penugasan.catatan_penilaian;
             }
+            this.catatan_penilaian_r1 = (this.Penugasan && this.Penugasan.catatan_penilaian_r1) ? this.Penugasan.catatan_penilaian_r1 : '';
+            this.catatan_penilaian_r2 = (this.Penugasan && this.Penugasan.catatan_penilaian_r2) ? this.Penugasan.catatan_penilaian_r2 : '';
             // isDone = true jika status GRADED, VALIDATING, FINALIZED, PUBLISHED, atau REJECTED
             this.isDone = ['GRADED', 'VALIDATING', 'FINALIZED', 'PUBLISHED', 'REJECTED'].includes(this.Penugasan.status);
             if (this.adminReadonly) this.isDone = true;
@@ -777,6 +880,10 @@
                 kategori.pertanyaan.forEach(q => {
                     let dbScore = null;
                     let dbNote = '';
+                    let dbScoreR1 = null;
+                    let dbScoreR2 = null;
+                    let dbNoteR1 = '';
+                    let dbNoteR2 = '';
                     if (q.jawaban_peserta) {
                         this.answers[q.id] = q.jawaban_peserta.opsi_dipilih
                             ? q.jawaban_peserta.opsi_dipilih.keterangan
@@ -784,15 +891,34 @@
                         this.links[q.id] = q.jawaban_peserta.tautan_bukti_drive;
                         const rawScore = q.jawaban_peserta.skor_validasi_reviewer;
                         if (rawScore !== null && rawScore !== undefined && rawScore !== '' && typeof rawScore !== 'object' && !isNaN(rawScore)) {
-                            dbScore = parseInt(rawScore, 10);
+                            dbScore = this.adminReadonly ? parseFloat(rawScore) : parseInt(rawScore, 10);
                         }
                         if (q.jawaban_peserta.note_reviewer && typeof q.jawaban_peserta.note_reviewer === 'string') {
                             dbNote = q.jawaban_peserta.note_reviewer;
+                        }
+                        const rawR1 = q.jawaban_peserta.skor_r1;
+                        if (rawR1 !== null && rawR1 !== undefined && rawR1 !== '' && !isNaN(rawR1)) {
+                            dbScoreR1 = parseInt(rawR1, 10);
+                        }
+                        const rawR2 = q.jawaban_peserta.skor_r2;
+                        if (rawR2 !== null && rawR2 !== undefined && rawR2 !== '' && !isNaN(rawR2)) {
+                            dbScoreR2 = parseInt(rawR2, 10);
+                        }
+                        if (q.jawaban_peserta.note_r1 && typeof q.jawaban_peserta.note_r1 === 'string') {
+                            dbNoteR1 = q.jawaban_peserta.note_r1;
+                        }
+                        if (q.jawaban_peserta.note_r2 && typeof q.jawaban_peserta.note_r2 === 'string') {
+                            dbNoteR2 = q.jawaban_peserta.note_r2;
                         }
                     } else {
                         this.answers[q.id] = 'Belum diisi';
                         this.links[q.id] = '';
                     }
+
+                    this.reviewerScoresR1[q.id] = dbScoreR1;
+                    this.reviewerScoresR2[q.id] = dbScoreR2;
+                    this.reviewerNotesR1[q.id] = dbNoteR1;
+                    this.reviewerNotesR2[q.id] = dbNoteR2;
 
                     // Jika masih ada edit lokal baru yang sedang diproses antrean FIFO server (TTL 30 detik),
                     // pertahankan nilai lokal agar background refresh tidak menimpa progres reviewer.
@@ -942,8 +1068,18 @@
                         <p class="text-[#62748e] text-[13px] md:text-[15px] mt-[6px]">Review isian data, periksa dokumen, dan berikan skor final (1-5).</p>
                     </div>
 
+                    {{-- Mode Pratinjau Admin Badge --}}
+                    <template x-if="adminReadonly">
+                        <div class="shrink-0 flex items-center gap-2" x-cloak>
+                            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 text-[12px] font-bold shadow-xs">
+                                <i data-lucide="shield" class="w-3.5 h-3.5 text-[#1b5e20]"></i>
+                                <span>Mode Pratinjau Admin</span>
+                            </div>
+                        </div>
+                    </template>
+
                     {{-- Cloud Sync Status Indicator (Reviewer Multi-Device Safe) --}}
-                    <div class="shrink-0 flex items-center gap-2" x-cloak>
+                    <div class="shrink-0 flex items-center gap-2" x-show="!adminReadonly" x-cloak>
                         {{-- Synced (Aman di Cloud) --}}
                         <template x-if="cloudStatus === 'synced' && !isSaving && !isRetrying">
                             <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#ecfdf5] border border-[#a7f3d0] text-[#065f46] text-[12px] font-bold shadow-xs transition-all">
@@ -1071,21 +1207,34 @@
                         {{-- Skor Overview --}}
                         @if(isset($adminReadonly) && $adminReadonly)
                         <div class="bg-white p-[24px] rounded-[12px] border border-[#cbd5e1] mb-6">
-                            <h3 class="font-bold text-[#1b5e20] text-[15px] mb-4 border-b border-[#e2e8f0] pb-2">Ringkasan Skor</h3>
-                            <div class="grid grid-cols-1 md:grid-cols-3 gap-[24px]">
-                                <div class="bg-[#f8fafc] p-4 rounded-[8px] border border-[#e2e8f0] text-center">
-                                    <p class="text-[12px] font-bold text-[#64748b] uppercase tracking-wider mb-1">Status</p>
-                                    <span class="inline-flex items-center gap-[6px] px-[12px] py-[4px] rounded-full text-[13px] font-bold" :class="submissionStatus.color">
-                                        <span x-text="submissionStatus.label"></span>
-                                    </span>
+                            <h3 class="font-bold text-[#1b5e20] text-[15px] mb-4 border-b border-[#e2e8f0] pb-2">Ringkasan Skor & Penilaian Reviewer</h3>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-[16px]">
+                                <div class="bg-[#f8fafc] p-4 rounded-[8px] border border-[#e2e8f0] text-center flex flex-col justify-center">
+                                    <p class="text-[11px] font-bold text-[#64748b] uppercase tracking-wider mb-1.5">Status</p>
+                                    <div>
+                                        <span class="inline-flex items-center gap-[6px] px-[12px] py-[4px] rounded-full text-[12px] font-bold" :class="submissionStatus.color">
+                                            <span x-text="submissionStatus.label"></span>
+                                        </span>
+                                    </div>
                                 </div>
-                                <div class="bg-[#f8fafc] p-4 rounded-[8px] border border-[#e2e8f0] text-center">
-                                    <p class="text-[12px] font-bold text-[#64748b] uppercase tracking-wider mb-1">Total Skor Sistem</p>
+                                <div class="bg-[#f8fafc] p-4 rounded-[8px] border border-[#e2e8f0] text-center flex flex-col justify-center">
+                                    <p class="text-[11px] font-bold text-[#64748b] uppercase tracking-wider mb-1">Skor Sistem</p>
                                     <p class="text-[22px] font-bold text-[#1d293d]" x-text="Penugasan.total_skor_sistem ?? 'N/A'"></p>
                                 </div>
-                                <div class="bg-[#f8fafc] p-4 rounded-[8px] border border-[#e2e8f0] text-center">
-                                    <p class="text-[12px] font-bold text-[#64748b] uppercase tracking-wider mb-1">Total Skor Akhir (Reviewer)</p>
+                                <div class="bg-[#ecfdf5]/60 p-4 rounded-[8px] border border-[#a7f3d0] text-center flex flex-col justify-center">
+                                    <p class="text-[11px] font-bold text-[#047857] uppercase tracking-wider mb-1">Skor Reviewer 1</p>
+                                    <p class="text-[22px] font-bold text-[#065f46]" x-text="totalScoredCountR1 > 0 ? formatScore(hasilTotalCapaianR1) : (Penugasan.nilai_reviewer_1 && Number(Penugasan.nilai_reviewer_1) > 0 ? formatScore(Penugasan.nilai_reviewer_1) : 'Belum Dinilai')"></p>
+                                    <p class="text-[11px] text-[#047857]/80 font-medium truncate mt-0.5" x-text="Penugasan.reviewer_1_name || 'Belum diplot'"></p>
+                                </div>
+                                <div class="bg-[#eff6ff]/70 p-4 rounded-[8px] border border-[#bfdbfe] text-center flex flex-col justify-center">
+                                    <p class="text-[11px] font-bold text-[#1d4ed8] uppercase tracking-wider mb-1">Skor Reviewer 2</p>
+                                    <p class="text-[22px] font-bold text-[#1e40af]" x-text="totalScoredCountR2 > 0 ? formatScore(hasilTotalCapaianR2) : (Penugasan.nilai_reviewer_2 && Number(Penugasan.nilai_reviewer_2) > 0 ? formatScore(Penugasan.nilai_reviewer_2) : 'Belum Dinilai')"></p>
+                                    <p class="text-[11px] text-[#1d4ed8]/80 font-medium truncate mt-0.5" x-text="Penugasan.reviewer_2_name || 'Belum diplot'"></p>
+                                </div>
+                                <div class="bg-[#f8fafc] p-4 rounded-[8px] border border-[#cbd5e1] text-center flex flex-col justify-center">
+                                    <p class="text-[11px] font-bold text-[#64748b] uppercase tracking-wider mb-1">Total Skor Akhir</p>
                                     <p class="text-[22px] font-bold text-[#1b5e20]" x-text="Penugasan.total_skor_akhir ?? 'N/A'"></p>
+                                    <p class="text-[10px] text-[#64748b] font-medium mt-0.5">Nilai Final / Rata-rata</p>
                                 </div>
                             </div>
                         </div>
@@ -1451,8 +1600,75 @@
                                                     </a>
                                                 </div>
 
+                                                {{-- Admin Readonly View: Skor & Catatan Reviewer 1 & 2 --}}
+                                                <template x-if="adminReadonly">
+                                                    <div class="pt-[16px] border-t border-[#cbd5e1] space-y-3">
+                                                        {{-- Card Reviewer 1 --}}
+                                                        <div class="bg-white border border-[#a7f3d0] rounded-[10px] p-[14px] shadow-xs space-y-2.5">
+                                                            <div class="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                                                                <div class="min-w-0">
+                                                                    <span class="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[#047857]">
+                                                                        <span class="w-2 h-2 rounded-full bg-[#10b981]"></span>
+                                                                        Reviewer 1
+                                                                    </span>
+                                                                    <p class="text-[12px] font-semibold text-slate-700 truncate" x-text="Penugasan.reviewer_1_name || 'Belum diplot'"></p>
+                                                                </div>
+                                                                <template x-if="hasReviewerScoreR1(q.id)">
+                                                                    <div class="shrink-0 inline-flex items-center gap-1.5 bg-[#ecfdf5] border border-[#10b981]/30 px-3 py-1 rounded-lg">
+                                                                        <span class="text-[11px] font-semibold text-[#047857]">Skor:</span>
+                                                                        <span class="text-[15px] font-extrabold text-[#065f46]" x-text="reviewerScoresR1[q.id] + ' / 5'"></span>
+                                                                    </div>
+                                                                </template>
+                                                                <template x-if="!hasReviewerScoreR1(q.id)">
+                                                                    <span class="shrink-0 px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-[11px] font-bold text-slate-400">Belum Dinilai</span>
+                                                                </template>
+                                                            </div>
+                                                            <div>
+                                                                <p class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Catatan Reviewer 1:</p>
+                                                                <template x-if="reviewerNotesR1[q.id] && reviewerNotesR1[q.id].trim() !== ''">
+                                                                    <p class="text-[13px] text-slate-700 bg-[#f8fafc] border border-slate-200/80 rounded-lg p-2.5 leading-relaxed whitespace-pre-line" x-text="reviewerNotesR1[q.id]"></p>
+                                                                </template>
+                                                                <template x-if="!reviewerNotesR1[q.id] || reviewerNotesR1[q.id].trim() === ''">
+                                                                    <p class="text-[12px] text-slate-400 italic">Belum ada catatan dari Reviewer 1</p>
+                                                                </template>
+                                                            </div>
+                                                        </div>
+
+                                                        {{-- Card Reviewer 2 --}}
+                                                        <div class="bg-white border border-[#bfdbfe] rounded-[10px] p-[14px] shadow-xs space-y-2.5">
+                                                            <div class="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                                                                <div class="min-w-0">
+                                                                    <span class="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[#1d4ed8]">
+                                                                        <span class="w-2 h-2 rounded-full bg-[#3b82f6]"></span>
+                                                                        Reviewer 2
+                                                                    </span>
+                                                                    <p class="text-[12px] font-semibold text-slate-700 truncate" x-text="Penugasan.reviewer_2_name || 'Belum diplot'"></p>
+                                                                </div>
+                                                                <template x-if="hasReviewerScoreR2(q.id)">
+                                                                    <div class="shrink-0 inline-flex items-center gap-1.5 bg-[#eff6ff] border border-[#3b82f6]/30 px-3 py-1 rounded-lg">
+                                                                        <span class="text-[11px] font-semibold text-[#1d4ed8]">Skor:</span>
+                                                                        <span class="text-[15px] font-extrabold text-[#1e40af]" x-text="reviewerScoresR2[q.id] + ' / 5'"></span>
+                                                                    </div>
+                                                                </template>
+                                                                <template x-if="!hasReviewerScoreR2(q.id)">
+                                                                    <span class="shrink-0 px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-[11px] font-bold text-slate-400">Belum Dinilai</span>
+                                                                </template>
+                                                            </div>
+                                                            <div>
+                                                                <p class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Catatan Reviewer 2:</p>
+                                                                <template x-if="reviewerNotesR2[q.id] && reviewerNotesR2[q.id].trim() !== ''">
+                                                                    <p class="text-[13px] text-slate-700 bg-[#f8fafc] border border-slate-200/80 rounded-lg p-2.5 leading-relaxed whitespace-pre-line" x-text="reviewerNotesR2[q.id]"></p>
+                                                                </template>
+                                                                <template x-if="!reviewerNotesR2[q.id] || reviewerNotesR2[q.id].trim() === ''">
+                                                                    <p class="text-[12px] text-slate-400 italic">Belum ada catatan dari Reviewer 2</p>
+                                                                </template>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </template>
+
                                                 {{-- Reviewer Form Input --}}
-                                                <div class="pt-[16px] border-t border-[#cbd5e1] relative">
+                                                <div x-show="!adminReadonly" class="pt-[16px] border-t border-[#cbd5e1] relative">
 
                                                     {{-- Unlock overlay --}}
                                                     <div x-show="!isDone && !unlockedQuestions[q.id] && !reviewerScores[q.id]"
@@ -1597,20 +1813,51 @@
                                 </h2>
                                 <p class="text-white/70 text-[13px] md:text-[14px] font-medium mt-1" x-text="institusi.nama_institusi"></p>
 
-                                {{-- Progress Penilaian Reviewer Bar --}}
-                                <div class="mt-4 max-w-[420px] bg-black/20 border border-white/10 rounded-lg p-2.5 backdrop-blur-sm">
-                                    <div class="flex items-center justify-between text-[11px] text-white/90 mb-1 font-medium">
-                                        <span class="flex items-center gap-1.5">
-                                            <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-white"></i> Progres Penilaian
-                                        </span>
-                                        <span class="font-bold" x-text="totalScoredCount + ' / ' + totalQuestions + ' Indikator (' + progressPercentage + '%)'"></span>
+                                {{-- Progress Penilaian Reviewer Bar (Single Reviewer Mode) --}}
+                                <template x-if="!adminReadonly">
+                                    <div class="mt-4 max-w-[420px] bg-black/20 border border-white/10 rounded-lg p-2.5 backdrop-blur-sm">
+                                        <div class="flex items-center justify-between text-[11px] text-white/90 mb-1 font-medium">
+                                            <span class="flex items-center gap-1.5">
+                                                <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-white"></i> Progres Penilaian
+                                            </span>
+                                            <span class="font-bold" x-text="totalScoredCount + ' / ' + totalQuestions + ' Indikator (' + progressPercentage + '%)'"></span>
+                                        </div>
+                                        <div class="w-full bg-white/20 rounded-full h-2 overflow-hidden">
+                                            <div class="bg-white h-2 rounded-full transition-all duration-300" :style="'width: ' + progressPercentage + '%'"></div>
+                                        </div>
+                                        <p class="text-[10px] text-white/75 mt-1.5"
+                                            x-text="isNoneScored ? 'Belum ada indikator yang dinilai — mulai isi pada tab Form Penilaian Rubrik.' : (isAllScored ? 'Seluruh indikator telah dinilai dan dihitung sesuai bobot rubrik.' : (totalScoredCount + ' indikator telah dinilai, tersisa ' + (totalQuestions - totalScoredCount) + ' indikator lagi.'))"></p>
                                     </div>
-                                    <div class="w-full bg-white/20 rounded-full h-2 overflow-hidden">
-                                        <div class="bg-white h-2 rounded-full transition-all duration-300" :style="'width: ' + progressPercentage + '%'"></div>
+                                </template>
+
+                                {{-- Admin Mode: Ringkasan Skor & Progres Reviewer 1 & Reviewer 2 --}}
+                                <template x-if="adminReadonly">
+                                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-[560px]">
+                                        <div class="bg-black/20 border border-white/15 rounded-xl p-3 backdrop-blur-sm">
+                                            <div class="flex items-center justify-between gap-2 mb-1">
+                                                <span class="text-[10px] font-bold uppercase tracking-wider text-emerald-200">Reviewer 1</span>
+                                                <span class="text-[16px] font-extrabold text-white" x-text="totalScoredCountR1 > 0 ? formatScore(hasilTotalCapaianR1) : '0'"></span>
+                                            </div>
+                                            <p class="text-[12px] font-semibold text-white/90 truncate mb-2" x-text="Penugasan.reviewer_1_name || 'Belum diplot'"></p>
+                                            <div class="w-full bg-white/20 rounded-full h-1.5 overflow-hidden mb-1">
+                                                <div class="bg-emerald-300 h-1.5 rounded-full transition-all duration-300" :style="'width: ' + progressPercentageR1 + '%'"></div>
+                                            </div>
+                                            <p class="text-[10px] text-white/75 font-medium" x-text="totalScoredCountR1 + ' / ' + totalQuestions + ' Indikator (' + progressPercentageR1 + '%)'"></p>
+                                        </div>
+
+                                        <div class="bg-black/20 border border-white/15 rounded-xl p-3 backdrop-blur-sm">
+                                            <div class="flex items-center justify-between gap-2 mb-1">
+                                                <span class="text-[10px] font-bold uppercase tracking-wider text-sky-200">Reviewer 2</span>
+                                                <span class="text-[16px] font-extrabold text-white" x-text="totalScoredCountR2 > 0 ? formatScore(hasilTotalCapaianR2) : '0'"></span>
+                                            </div>
+                                            <p class="text-[12px] font-semibold text-white/90 truncate mb-2" x-text="Penugasan.reviewer_2_name || 'Belum diplot'"></p>
+                                            <div class="w-full bg-white/20 rounded-full h-1.5 overflow-hidden mb-1">
+                                                <div class="bg-sky-300 h-1.5 rounded-full transition-all duration-300" :style="'width: ' + progressPercentageR2 + '%'"></div>
+                                            </div>
+                                            <p class="text-[10px] text-white/75 font-medium" x-text="totalScoredCountR2 + ' / ' + totalQuestions + ' Indikator (' + progressPercentageR2 + '%)'"></p>
+                                        </div>
                                     </div>
-                                    <p class="text-[10px] text-white/75 mt-1.5"
-                                        x-text="isNoneScored ? 'Belum ada indikator yang dinilai — mulai isi pada tab Form Penilaian Rubrik.' : (isAllScored ? 'Seluruh indikator telah dinilai dan dihitung sesuai bobot rubrik.' : (totalScoredCount + ' indikator telah dinilai, tersisa ' + (totalQuestions - totalScoredCount) + ' indikator lagi.'))"></p>
-                                </div>
+                                </template>
                             </div>
 
                             {{-- Circle Score --}}
@@ -1628,7 +1875,7 @@
                                         <span class="text-white font-extrabold text-[28px] md:text-[32px] leading-none tracking-tight whitespace-nowrap"
                                             x-text="formatScore(hasilTotalCapaian)"></span>
                                         <span class="text-white/80 text-[10px] font-bold tracking-[0.2em] uppercase mt-2 text-center"
-                                            x-text="showReviewScore ? 'Skor Final' : 'Estimasi Skor'"></span>
+                                            x-text="adminReadonly ? 'Skor Akhir' : (showReviewScore ? 'Skor Final' : 'Estimasi Skor')"></span>
                                     </div>
                                 </div>
                             </div>
@@ -1656,26 +1903,57 @@
                                             <div>
                                                 <div class="flex flex-wrap items-center gap-2">
                                                     <h3 class="font-bold text-[#1d293d] text-[15px] group-hover:text-[#1b5e20] transition-colors" x-text="cat.name"></h3>
-                                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                                                        :class="cat.is_empty ? 'bg-slate-100 text-slate-500' : (cat.is_complete ? 'bg-emerald-50 text-[#1b5e20] border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200')"
-                                                        x-text="cat.is_empty ? ('Belum dinilai (0/' + cat.total_count + ')') : (cat.is_complete ? ('Lengkap (' + cat.scored_count + '/' + cat.total_count + ')') : (cat.scored_count + '/' + cat.total_count + ' dinilai'))"></span>
+                                                    <template x-if="!adminReadonly">
+                                                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                                                            :class="cat.is_empty ? 'bg-slate-100 text-slate-500' : (cat.is_complete ? 'bg-emerald-50 text-[#1b5e20] border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200')"
+                                                            x-text="cat.is_empty ? ('Belum dinilai (0/' + cat.total_count + ')') : (cat.is_complete ? ('Lengkap (' + cat.scored_count + '/' + cat.total_count + ')') : (cat.scored_count + '/' + cat.total_count + ' dinilai'))"></span>
+                                                    </template>
+                                                    <template x-if="adminReadonly">
+                                                        <div class="flex flex-wrap items-center gap-1.5">
+                                                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-[#047857] border border-emerald-200"
+                                                                x-text="'R1: ' + cat.scored_count_r1 + '/' + cat.total_count + ' dinilai'"></span>
+                                                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-[#1d4ed8] border border-blue-200"
+                                                                x-text="'R2: ' + cat.scored_count_r2 + '/' + cat.total_count + ' dinilai'"></span>
+                                                        </div>
+                                                    </template>
                                                 </div>
                                                 <p class="text-[11px] text-[#64748b] font-medium uppercase tracking-wider mt-0.5">Klik untuk melihat detail pertanyaan</p>
                                             </div>
                                         </div>
 
                                         <div class="flex items-center gap-4 md:gap-6 shrink-0">
-                                            <div class="text-right border-r border-[#e2e8f0] pr-4 md:pr-6">
-                                                <p class="text-[10px] font-bold text-[#94a3b8] uppercase tracking-widest mb-1">Capaian Skor</p>
-                                                <div class="flex items-baseline gap-1 justify-end">
-                                                    <span class="text-[18px] font-extrabold"
-                                                        :class="cat.is_empty ? 'text-[#94a3b8]' : 'text-[#1b5e20]'"
-                                                        x-text="formatScore(cat.capaian_skor)"></span>
+                                            <template x-if="!adminReadonly">
+                                                <div class="text-right border-r border-[#e2e8f0] pr-4 md:pr-6">
+                                                    <p class="text-[10px] font-bold text-[#94a3b8] uppercase tracking-widest mb-1">Capaian Skor</p>
+                                                    <div class="flex items-baseline gap-1 justify-end">
+                                                        <span class="text-[18px] font-extrabold"
+                                                            :class="cat.is_empty ? 'text-[#94a3b8]' : 'text-[#1b5e20]'"
+                                                            x-text="formatScore(cat.capaian_skor)"></span>
+                                                    </div>
+                                                    <p class="text-[10px] text-[#64748b] font-medium mt-0.5">
+                                                        dari bobot <span x-text="Number(cat.bobot || 0).toFixed(0)"></span>
+                                                    </p>
                                                 </div>
-                                                <p class="text-[10px] text-[#64748b] font-medium mt-0.5">
-                                                    dari bobot <span x-text="Number(cat.bobot || 0).toFixed(0)"></span>
-                                                </p>
-                                            </div>
+                                            </template>
+                                            <template x-if="adminReadonly">
+                                                <div class="flex items-center gap-4 border-r border-[#e2e8f0] pr-4 md:pr-6">
+                                                    <div class="text-right">
+                                                        <p class="text-[10px] font-bold text-[#059669] uppercase tracking-widest mb-0.5">Skor R1</p>
+                                                        <span class="text-[16px] font-extrabold"
+                                                            :class="cat.scored_count_r1 === 0 ? 'text-[#94a3b8]' : 'text-[#047857]'"
+                                                            x-text="formatScore(cat.capaian_r1)"></span>
+                                                        <p class="text-[10px] text-[#64748b] font-medium">bobot <span x-text="Number(cat.bobot || 0).toFixed(0)"></span></p>
+                                                    </div>
+                                                    <div class="h-8 w-px bg-[#e2e8f0]"></div>
+                                                    <div class="text-right">
+                                                        <p class="text-[10px] font-bold text-[#2563eb] uppercase tracking-widest mb-0.5">Skor R2</p>
+                                                        <span class="text-[16px] font-extrabold"
+                                                            :class="cat.scored_count_r2 === 0 ? 'text-[#94a3b8]' : 'text-[#1d4ed8]'"
+                                                            x-text="formatScore(cat.capaian_r2)"></span>
+                                                        <p class="text-[10px] text-[#64748b] font-medium">bobot <span x-text="Number(cat.bobot || 0).toFixed(0)"></span></p>
+                                                    </div>
+                                                </div>
+                                            </template>
                                             <div class="w-9 h-9 rounded-full flex items-center justify-center bg-[#f1f5f9] border border-[#e2e8f0] group-hover:bg-[#e8f5e9] group-hover:border-[#c8e6c9] transition-all duration-300">
                                                 <span class="transition-transform duration-300 inline-block" :class="openCategories[idx] ? 'rotate-180' : 'rotate-0'">
                                                     <i data-lucide="chevron-down" class="w-[20px] h-[20px] text-[#475569] group-hover:text-[#1b5e20]"></i>
@@ -1690,32 +1968,73 @@
                                         <div class="divide-y divide-[#f1f5f9]">
                                             <template x-for="(item, iIdx) in cat.items" :key="iIdx">
                                                 <div class="px-6 py-5 hover:bg-white transition-colors">
-                                                    <div class="flex items-start justify-between gap-4 mb-4">
+                                                    <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4">
                                                         <div class="flex items-start gap-4">
                                                             <div class="w-7 h-7 rounded-lg bg-[#f1f5f9] flex items-center justify-center shrink-0 mt-0.5">
                                                                 <span class="text-[12px] font-bold text-[#475569]" x-text="item.no"></span>
                                                             </div>
                                                             <p class="text-[14px] font-semibold text-[#1e293b] leading-relaxed max-w-[500px]" x-text="item.title"></p>
                                                         </div>
-                                                        <div class="shrink-0 flex flex-col items-end gap-1.5">
-                                                            <template x-if="item.has_score">
-                                                                <div class="flex flex-col items-end">
-                                                                    <span class="text-[9px] font-bold text-[#059669] uppercase tracking-[0.1em] mb-1">Skor Reviewer</span>
-                                                                    <div class="flex items-center gap-1.5 bg-[#ecfdf5] border border-[#10b981]/20 px-3 py-1.5 rounded-lg">
-                                                                        <i data-lucide="check-circle" class="w-3.5 h-3.5 text-[#059669]"></i>
-                                                                        <span class="text-[13px] font-bold text-[#047857]" x-text="parseInt(item.score) + ' / ' + item.max"></span>
+
+                                                        {{-- Single Reviewer Score Pill --}}
+                                                        <template x-if="!adminReadonly">
+                                                            <div class="shrink-0 flex flex-col items-end gap-1.5">
+                                                                <template x-if="item.has_score">
+                                                                    <div class="flex flex-col items-end">
+                                                                        <span class="text-[9px] font-bold text-[#059669] uppercase tracking-[0.1em] mb-1">Skor Reviewer</span>
+                                                                        <div class="flex items-center gap-1.5 bg-[#ecfdf5] border border-[#10b981]/20 px-3 py-1.5 rounded-lg">
+                                                                            <i data-lucide="check-circle" class="w-3.5 h-3.5 text-[#059669]"></i>
+                                                                            <span class="text-[13px] font-bold text-[#047857]" x-text="parseInt(item.score) + ' / ' + item.max"></span>
+                                                                        </div>
                                                                     </div>
-                                                                </div>
-                                                            </template>
-                                                            <template x-if="!item.has_score">
-                                                                <div class="flex flex-col items-end">
-                                                                    <span class="text-[9px] font-bold text-[#94a3b8] uppercase tracking-[0.1em] mb-1">Status</span>
-                                                                    <div class="flex items-center gap-1.5 bg-[#f8fafc] border border-[#cbd5e1] px-3 py-1.5 rounded-lg">
-                                                                        <span class="text-[12px] font-bold text-[#94a3b8]">Belum Dinilai (0 / 5)</span>
+                                                                </template>
+                                                                <template x-if="!item.has_score">
+                                                                    <div class="flex flex-col items-end">
+                                                                        <span class="text-[9px] font-bold text-[#94a3b8] uppercase tracking-[0.1em] mb-1">Status</span>
+                                                                        <div class="flex items-center gap-1.5 bg-[#f8fafc] border border-[#cbd5e1] px-3 py-1.5 rounded-lg">
+                                                                            <span class="text-[12px] font-bold text-[#94a3b8]">Belum Dinilai (0 / 5)</span>
+                                                                        </div>
                                                                     </div>
+                                                                </template>
+                                                            </div>
+                                                        </template>
+
+                                                        {{-- Admin Mode: Skor Reviewer 1 & Skor Reviewer 2 Side-by-Side --}}
+                                                        <template x-if="adminReadonly">
+                                                            <div class="shrink-0 flex flex-wrap items-center sm:justify-end gap-2.5 ml-[44px] sm:ml-0">
+                                                                {{-- Skor R1 --}}
+                                                                <div class="flex flex-col items-start sm:items-end">
+                                                                    <span class="text-[9px] font-bold text-[#059669] uppercase tracking-[0.08em] mb-1">Skor Reviewer 1</span>
+                                                                    <template x-if="item.has_score_r1">
+                                                                        <div class="flex items-center gap-1.5 bg-[#ecfdf5] border border-[#10b981]/25 px-3 py-1.5 rounded-lg">
+                                                                            <i data-lucide="check-circle" class="w-3.5 h-3.5 text-[#059669]"></i>
+                                                                            <span class="text-[13px] font-bold text-[#047857]" x-text="item.score_r1 + ' / ' + item.max"></span>
+                                                                        </div>
+                                                                    </template>
+                                                                    <template x-if="!item.has_score_r1">
+                                                                        <div class="flex items-center gap-1.5 bg-[#f8fafc] border border-[#cbd5e1] px-2.5 py-1.5 rounded-lg">
+                                                                            <span class="text-[11px] font-bold text-[#94a3b8]">Belum Dinilai</span>
+                                                                        </div>
+                                                                    </template>
                                                                 </div>
-                                                            </template>
-                                                        </div>
+
+                                                                {{-- Skor R2 --}}
+                                                                <div class="flex flex-col items-start sm:items-end">
+                                                                    <span class="text-[9px] font-bold text-[#2563eb] uppercase tracking-[0.08em] mb-1">Skor Reviewer 2</span>
+                                                                    <template x-if="item.has_score_r2">
+                                                                        <div class="flex items-center gap-1.5 bg-[#eff6ff] border border-[#3b82f6]/25 px-3 py-1.5 rounded-lg">
+                                                                            <i data-lucide="check-circle" class="w-3.5 h-3.5 text-[#2563eb]"></i>
+                                                                            <span class="text-[13px] font-bold text-[#1d4ed8]" x-text="item.score_r2 + ' / ' + item.max"></span>
+                                                                        </div>
+                                                                    </template>
+                                                                    <template x-if="!item.has_score_r2">
+                                                                        <div class="flex items-center gap-1.5 bg-[#f8fafc] border border-[#cbd5e1] px-2.5 py-1.5 rounded-lg">
+                                                                            <span class="text-[11px] font-bold text-[#94a3b8]">Belum Dinilai</span>
+                                                                        </div>
+                                                                    </template>
+                                                                </div>
+                                                            </div>
+                                                        </template>
                                                     </div>
 
                                                     <div class="ml-[44px] space-y-4">
@@ -1745,12 +2064,54 @@
                                                             </div>
                                                         </div>
 
-                                                        <template x-if="item.catatan">
+                                                        {{-- Single Reviewer Mode: Catatan Reviewer --}}
+                                                        <template x-if="!adminReadonly && item.catatan">
                                                             <div class="bg-gradient-to-r from-[#fffbeb] to-[#fffde0] border-l-4 border-[#f59e0b] rounded-r-lg p-4 shadow-sm mt-3">
                                                                 <p class="text-[11px] font-bold text-[#92400e] uppercase tracking-widest mb-1.5 flex items-center gap-2">
                                                                     <i data-lucide="info" class="w-4 h-4"></i> Catatan Reviewer
                                                                 </p>
                                                                 <p class="text-[13px] font-semibold text-[#78350f] leading-relaxed whitespace-pre-line" x-text="item.catatan"></p>
+                                                            </div>
+                                                        </template>
+
+                                                        {{-- Admin Mode: Catatan Reviewer 1 & Catatan Reviewer 2 --}}
+                                                        <template x-if="adminReadonly">
+                                                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                                                                {{-- Catatan R1 --}}
+                                                                <div class="rounded-r-lg rounded-l-sm border-l-4 p-3.5 shadow-xs"
+                                                                    :class="item.catatan_r1 ? 'bg-gradient-to-r from-[#ecfdf5]/80 to-[#f0fdf4]/40 border-[#10b981]' : 'bg-slate-50 border-slate-300'">
+                                                                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                                                                        <p class="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5"
+                                                                            :class="item.catatan_r1 ? 'text-[#065f46]' : 'text-slate-500'">
+                                                                            <i data-lucide="message-square-text" class="w-3.5 h-3.5"></i> Catatan Reviewer 1
+                                                                        </p>
+                                                                        <span class="text-[10px] font-medium text-slate-500 truncate max-w-[140px]" x-text="Penugasan.reviewer_1_name || ''"></span>
+                                                                    </div>
+                                                                    <template x-if="item.catatan_r1">
+                                                                        <p class="text-[13px] font-medium text-[#064e3b] leading-relaxed whitespace-pre-line" x-text="item.catatan_r1"></p>
+                                                                    </template>
+                                                                    <template x-if="!item.catatan_r1">
+                                                                        <p class="text-[12px] text-slate-400 italic">Belum ada catatan dari Reviewer 1</p>
+                                                                    </template>
+                                                                </div>
+
+                                                                {{-- Catatan R2 --}}
+                                                                <div class="rounded-r-lg rounded-l-sm border-l-4 p-3.5 shadow-xs"
+                                                                    :class="item.catatan_r2 ? 'bg-gradient-to-r from-[#eff6ff]/80 to-[#f8fafc] border-[#3b82f6]' : 'bg-slate-50 border-slate-300'">
+                                                                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                                                                        <p class="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5"
+                                                                            :class="item.catatan_r2 ? 'text-[#1e40af]' : 'text-slate-500'">
+                                                                            <i data-lucide="message-square-text" class="w-3.5 h-3.5"></i> Catatan Reviewer 2
+                                                                        </p>
+                                                                        <span class="text-[10px] font-medium text-slate-500 truncate max-w-[140px]" x-text="Penugasan.reviewer_2_name || ''"></span>
+                                                                    </div>
+                                                                    <template x-if="item.catatan_r2">
+                                                                        <p class="text-[13px] font-medium text-[#1e3a8a] leading-relaxed whitespace-pre-line" x-text="item.catatan_r2"></p>
+                                                                    </template>
+                                                                    <template x-if="!item.catatan_r2">
+                                                                        <p class="text-[12px] text-slate-400 italic">Belum ada catatan dari Reviewer 2</p>
+                                                                    </template>
+                                                                </div>
                                                             </div>
                                                         </template>
                                                     </div>
@@ -1763,18 +2124,67 @@
                         </div>
 
                         {{-- Catatan Penilaian (Executive Summary) Hasil Card --}}
-                        <div x-show="catatan_penilaian && catatan_penilaian.trim().length > 0" class="bg-white border border-[#e0e0e0] rounded-xl p-6 shadow-sm">
-                            <div class="flex items-center gap-3 pb-3 border-b border-slate-100 mb-3">
-                                <div class="w-9 h-9 rounded-lg bg-emerald-50 text-[#1b5e20] flex items-center justify-center shrink-0 border border-emerald-100">
-                                    <i data-lucide="clipboard-signature" class="w-5 h-5"></i>
+                        <template x-if="!adminReadonly">
+                            <div class="bg-white border border-[#e0e0e0] rounded-xl p-6 shadow-sm">
+                                <div class="flex items-center gap-3 pb-3 border-b border-slate-100 mb-3">
+                                    <div class="w-9 h-9 rounded-lg bg-emerald-50 text-[#1b5e20] flex items-center justify-center shrink-0 border border-emerald-100">
+                                        <i data-lucide="clipboard-signature" class="w-5 h-5"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="font-bold text-[#1d293d] text-[15px]">Catatan Penilaian (Executive Summary)</h4>
+                                        <p class="text-[11px] text-[#64748b]">Ulasan menyeluruh yang dicantumkan pada laporan resume hasil penilaian</p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <h4 class="font-bold text-[#1d293d] text-[15px]">Catatan Penilaian (Executive Summary)</h4>
-                                    <p class="text-[11px] text-[#64748b]">Ulasan menyeluruh yang dicantumkan pada laporan resume hasil penilaian</p>
+                                <template x-if="catatan_penilaian && catatan_penilaian.trim().length > 0">
+                                    <p class="text-[13px] text-slate-700 leading-relaxed whitespace-pre-line" x-text="catatan_penilaian"></p>
+                                </template>
+                                <template x-if="!catatan_penilaian || catatan_penilaian.trim().length === 0">
+                                    <p class="text-[13px] text-slate-400 italic">catatan belum terisi</p>
+                                </template>
+                            </div>
+                        </template>
+
+                        {{-- Admin Mode: Catatan Penilaian (Executive Summary) Reviewer 1 & 2 --}}
+                        <template x-if="adminReadonly">
+                            <div class="bg-white border border-[#e0e0e0] rounded-xl p-6 shadow-sm">
+                                <div class="flex items-center gap-3 pb-4 border-b border-slate-100 mb-4">
+                                    <div class="w-9 h-9 rounded-lg bg-emerald-50 text-[#1b5e20] flex items-center justify-center shrink-0 border border-emerald-100">
+                                        <i data-lucide="clipboard-signature" class="w-5 h-5"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="font-bold text-[#1d293d] text-[15px]">Catatan Penilaian Akhir (Executive Summary)</h4>
+                                        <p class="text-[11px] text-[#64748b]">Ulasan menyeluruh dari masing-masing reviewer saat finalisasi penilaian</p>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div class="rounded-xl border border-[#a7f3d0] bg-[#ecfdf5]/30 p-4">
+                                        <div class="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-emerald-100">
+                                            <span class="text-[11px] font-bold uppercase tracking-wider text-[#047857]">Catatan Penilaian Reviewer 1</span>
+                                            <span class="text-[11px] font-semibold text-slate-600 truncate" x-text="Penugasan.reviewer_1_name || 'Belum diplot'"></span>
+                                        </div>
+                                        <template x-if="catatan_penilaian_r1 && catatan_penilaian_r1.trim().length > 0">
+                                            <p class="text-[13px] text-slate-700 leading-relaxed whitespace-pre-line" x-text="catatan_penilaian_r1"></p>
+                                        </template>
+                                        <template x-if="!catatan_penilaian_r1 || catatan_penilaian_r1.trim().length === 0">
+                                            <p class="text-[13px] text-slate-400 italic">catatan belum terisi</p>
+                                        </template>
+                                    </div>
+
+                                    <div class="rounded-xl border border-[#bfdbfe] bg-[#eff6ff]/30 p-4">
+                                        <div class="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-blue-100">
+                                            <span class="text-[11px] font-bold uppercase tracking-wider text-[#1d4ed8]">Catatan Penilaian Reviewer 2</span>
+                                            <span class="text-[11px] font-semibold text-slate-600 truncate" x-text="Penugasan.reviewer_2_name || 'Belum diplot'"></span>
+                                        </div>
+                                        <template x-if="catatan_penilaian_r2 && catatan_penilaian_r2.trim().length > 0">
+                                            <p class="text-[13px] text-slate-700 leading-relaxed whitespace-pre-line" x-text="catatan_penilaian_r2"></p>
+                                        </template>
+                                        <template x-if="!catatan_penilaian_r2 || catatan_penilaian_r2.trim().length === 0">
+                                            <p class="text-[13px] text-slate-400 italic">catatan belum terisi</p>
+                                        </template>
+                                    </div>
                                 </div>
                             </div>
-                            <p class="text-[13px] text-slate-700 leading-relaxed whitespace-pre-line" x-text="catatan_penilaian"></p>
-                        </div>
+                        </template>
                     </div>
 
                 </div>

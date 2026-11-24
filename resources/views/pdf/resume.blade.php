@@ -342,9 +342,15 @@
             <div class="section-banner banner-green">
                 CATATAN PENILAIAN
             </div>
-            <div style="font-size: 13px; line-height: 1.62; text-align: justify; color: #111111; margin-top: 8px;">
-                {!! nl2br(e($catatan_penilaian)) !!}
-            </div>
+            @if (!empty(trim($catatan_penilaian ?? '')))
+                <div style="font-size: 13px; line-height: 1.62; text-align: justify; color: #111111; margin-top: 8px;">
+                    {!! nl2br(e($catatan_penilaian)) !!}
+                </div>
+            @else
+                <div style="font-size: 13px; line-height: 1.62; color: #888888; font-style: italic; margin-top: 8px;">
+                    catatan belum terisi
+                </div>
+            @endif
         </div>
     </div>
 
