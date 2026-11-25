@@ -95,6 +95,11 @@
             const res = await fetch(`/api/penugasan/reviewer/tasks/${this.pesertaId}/save-scores`, {
                 method: 'POST', headers, body: JSON.stringify({ scores, notes })
             });
+            if (res.status === 401) {
+                // Sesi tidak berlaku lagi: retry tidak akan pernah berhasil, arahkan ke login
+                this.handleUnauthenticated();
+                throw fail('Sesi berakhir, silakan login ulang.');
+            }
             const data = await readJson(res);
             if (!res.ok || !data.success) {
                 throw fail(data.message || ('HTTP ' + res.status), data.errors?.error_type || 'general');
@@ -1028,6 +1033,20 @@
             }
         },
 
+        // Token dicabut (mis. akun yang sama login di device lain): hapus cache lama lalu ke halaman login
+        handleUnauthenticated() {
+            if (this._redirectingToLogin) return;
+            this._redirectingToLogin = true;
+            this.clearRetryTimer();
+            try {
+                sessionStorage.removeItem(this.getCacheKey());
+                sessionStorage.removeItem(this.getPendingEditsKey());
+                sessionStorage.removeItem('reviewer_tasks_cache');
+                ['auth_token', 'auth_user', 'user_status', 'token_expires_at'].forEach(k => localStorage.removeItem(k));
+            } catch (e) {}
+            window.location.href = '/masuk';
+        },
+
         // Refresh data dari server tanpa menimpa edit lokal yang belum tersimpan
         lastFetchAt: 0,
         refreshFromServer() {
@@ -1051,6 +1070,11 @@
                 const headers = { 'Accept': 'application/json' };
                 if (token) headers['Authorization'] = 'Bearer ' + token;
                 const response = await fetch(apiUrl, { headers, cache: 'no-store' });
+                // Token dicabut (mis. akun login di device lain): jangan terus menampilkan cache lama
+                if (response.status === 401 && !this.adminReadonly) {
+                    this.handleUnauthenticated();
+                    return;
+                }
                 const result = await response.json();
                 if (response.ok && result.success) {
                     try { sessionStorage.setItem(cacheKey, JSON.stringify(result.data)); } catch(e) {}

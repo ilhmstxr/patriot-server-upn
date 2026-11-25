@@ -20,6 +20,15 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(function (\Throwable $e, \Illuminate\Http\Request $request) {
             if ($request->expectsJson() || $request->ajax() || $request->header('X-Livewire')) {
+                // Pertahankan status HTTP asli agar frontend bisa membedakan 401/403/404/422 dari error server
+                $status = match (true) {
+                    $e instanceof \Illuminate\Auth\AuthenticationException => 401,
+                    $e instanceof \Illuminate\Auth\Access\AuthorizationException => 403,
+                    $e instanceof \Illuminate\Validation\ValidationException => 422,
+                    $e instanceof \Symfony\Component\HttpKernel\Exception\HttpExceptionInterface => $e->getStatusCode(),
+                    default => 500,
+                };
+
                 return response()->json([
                     'status'    => 'error',
                     'timestamp' => date('Y-m-d H:i:s'),
@@ -27,7 +36,7 @@ return Application::configure(basePath: dirname(__DIR__))
                     'exception' => get_class($e),
                     'file'      => str_replace(base_path(), '', $e->getFile()), // Hide absolute server path
                     'line'      => $e->getLine(),
-                ], 500);
+                ], $status);
             }
         });
     })->create();
