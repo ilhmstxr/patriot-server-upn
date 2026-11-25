@@ -366,6 +366,118 @@ class ResumeReportService
     }
 
     /**
+     * Skema rubrik resmi sebagai single source of truth (dipakai PDF Resume & Export Excel).
+     */
+    public static function getRubrikSchema(): array
+    {
+        return [
+            [
+                'key' => 'variabel_1',
+                'prefix' => 'A.',
+                'nama' => 'VARIABEL 1: PATRIOTISME KEBIJAKAN',
+                'judul_banner' => 'PATRIOTISME KEBIJAKAN',
+                'judul_pendek' => 'Patriotisme Kebijakan',
+                'deskripsi' => 'Menilai keberadaan dan implementasi kebijakan dan komitmen perguruan tinggi yang sejalan dengan nilai-nilai bela negara.',
+                'skor_maksimal' => 20,
+                'warna_banner' => '2F6D28',
+                'warna_header' => 'A7CCA4',
+                'warna_accent' => '3B822D',
+                'warna_bar_bg' => 'A8DCA5',
+                'indikators' => [
+                    ['kode' => 'A.1', 'no' => '1.1.', 'indikator' => 'Kebijakan Implementasi Nilai-Nilai Bela Negara dalam Kegiatan Tridharma'],
+                    ['kode' => 'A.2', 'no' => '1.2.', 'indikator' => 'Kebijakan pencegahan dan penanganan kekerasan'],
+                    ['kode' => 'A.3', 'no' => '1.3.', 'indikator' => 'Kebijakan Pencegahan dan Pemberantasan Penyalahgunaan dan Peredaran Gelap Narkotika dan Prekursor Narkotika'],
+                    ['kode' => 'A.4', 'no' => '1.4.', 'indikator' => 'Kebijakan mitigasi bencana serta satgas yang aktif dalam penanggulangan dan kesiapsiagaan bencana'],
+                    ['kode' => 'A.5', 'no' => '1.5.', 'indikator' => 'Kebijakan bagi sivitas akademika untuk bangga menggunakan produk lokal dalam pelaksanaan pembelajaran (sebagai contoh penggunaan batik, pakaian adat)'],
+                ],
+            ],
+            [
+                'key' => 'variabel_2',
+                'prefix' => 'B.',
+                'nama' => 'VARIABEL 2: PATRIOTISME KELEMBAGAAN',
+                'judul_banner' => 'PATRIOTISME KELEMBAGAAN',
+                'judul_pendek' => 'Patriotisme Kelembagaan',
+                'deskripsi' => 'Menilai kinerja perguruan tinggi dalam penyelenggaraan Tridharma Perguruan Tinggi dan penyediaan infrastruktur.',
+                'skor_maksimal' => 30,
+                'warna_banner' => 'DF692A',
+                'warna_header' => 'F5BBA5',
+                'warna_accent' => 'CC5D39',
+                'warna_bar_bg' => 'F7BBB1',
+                'indikators' => [
+                    ['kode' => 'B.1',  'no' => '2.1.',  'indikator' => 'Unit kerja yang berfokus pada pengembangan karakter bela negara'],
+                    ['kode' => 'B.2',  'no' => '2.2.',  'indikator' => 'Implementasi penyelenggaraan MKWK (Mata Kuliah Wajib Kurikulum : Pancasila, Agama, Bahasa Indonesia, Kewarganegaraan)'],
+                    ['kode' => 'B.3',  'no' => '2.3.',  'indikator' => 'Jumlah mata kuliah wajib institusi berkarakter bela negara'],
+                    ['kode' => 'B.4',  'no' => '2.4.',  'indikator' => 'Jumlah kelompok riset berkarakter bela negara'],
+                    ['kode' => 'B.5',  'no' => '2.5.',  'indikator' => 'Skema Kuliah Kerja Nyata (KKN)'],
+                    ['kode' => 'B.6',  'no' => '2.6.',  'indikator' => 'Jumlah luaran pengabdian masyarakat berupa karya inovatif, seperti pengembangan teknologi atau prototipe, desain produk'],
+                    ['kode' => 'B.7',  'no' => '2.7.',  'indikator' => 'Jumlah kolaborasi dengan UMKM atau pelaku usaha lokal untuk mendukung program tridharma'],
+                    ['kode' => 'B.8',  'no' => '2.8.',  'indikator' => 'Jumlah dosen yang mendapatkan pelatihan bela negara'],
+                    ['kode' => 'B.9',  'no' => '2.9.',  'indikator' => 'Pusat konseling bagi sivitas akademik'],
+                    ['kode' => 'B.10', 'no' => '2.10.', 'indikator' => 'Jumlah pegawai institusi sebagai anggota komponen cadangan (KOMCAD)'],
+                    ['kode' => 'B.11', 'no' => '2.11.', 'indikator' => 'Penyelenggaraan Upacara Hari Besar Nasional.'],
+                    ['kode' => 'B.12', 'no' => '2.12.', 'indikator' => 'Jumlah kegiatan sosialisasi/seminar/workshop tentang langkah-langkah menjaga kebersihan, keamanan dan pengelolaan lingkungan, serta anti-radikalisme'],
+                    ['kode' => 'B.13', 'no' => '2.13.', 'indikator' => 'Penyelenggaraan kompetisi lomba bertema nilai-nilai bela negara'],
+                    ['kode' => 'B.14', 'no' => '2.14.', 'indikator' => 'Jumlah penghargaan atau insentif atas prestasi sivitas akademika dari perguruan tinggi'],
+                    ['kode' => 'B.15', 'no' => '2.15.', 'indikator' => 'Fasilitas akomodasi yang layak untuk peserta didik penyandang disabilitas di lingkungan pendidikan tinggi'],
+                    ['kode' => 'B.16', 'no' => '2.16.', 'indikator' => 'Jumlah ragam dan variasi media kampanye nilai-nilai cinta tanah air yang disebarluaskan di area kampus'],
+                    ['kode' => 'B.17', 'no' => '2.17.', 'indikator' => 'Fasilitas yang disediakan universitas seperti ruang atau galeri yang digunakan untuk menampilkan karya seni atau hasil kreativitas mahasiswa dan kegiatan kebudayaan'],
+                    ['kode' => 'B.18', 'no' => '2.18.', 'indikator' => 'Ruang khusus (sekretariat) untuk organisasi mahasiswa'],
+                    ['kode' => 'B.19', 'no' => '2.19.', 'indikator' => 'Monumen tentang pahlawan nasional di area universitas'],
+                    ['kode' => 'B.20', 'no' => '2.20.', 'indikator' => 'Persentase jumlah UKM Keagamaan (dengan 6 agama)'],
+                ],
+            ],
+            [
+                'key' => 'variabel_3',
+                'prefix' => 'C.',
+                'nama' => 'VARIABEL 3: PATRIOTISME MAHASISWA',
+                'judul_banner' => 'PATRIOTISME MAHASISWA',
+                'judul_pendek' => 'Patriotisme Mahasiswa',
+                'deskripsi' => 'Menilai tingkat internalisasi, ekspresi perilaku, dan kontribusi nyata mahasiswa terhadap nilai-nilai bela negara dalam menjaga kedaulatan negara, keutuhan wilayah, serta keselamatan bangsa.',
+                'skor_maksimal' => 50,
+                'warna_banner' => 'F5A623',
+                'warna_header' => 'FEE199',
+                'warna_accent' => 'EAB318',
+                'warna_bar_bg' => 'FCE899',
+                'indikators' => [
+                    ['kode' => 'C.1',  'no' => '3.1.',  'indikator' => 'Mahasiswa aktif sebagai anggota komponen cadangan (KOMCAD)'],
+                    ['kode' => 'C.2',  'no' => '3.2.',  'indikator' => 'Jumlah mahasiswa yang terlibat aktif dalam pencegahan kekerasan di perguruan tinggi'],
+                    ['kode' => 'C.3',  'no' => '3.3.',  'indikator' => 'Jumlah mahasiswa yang terlibat pada upaya mitigasi bencana dalam penanggulangan dan kesiapsiagaan bencana'],
+                    ['kode' => 'C.4',  'no' => '3.4.',  'indikator' => 'Mahasiswa yang terlibat pada Kuliah Kerja Nyata (KKN) di daerah 3T/ bencana/ konflik'],
+                    ['kode' => 'C.5',  'no' => '3.5.',  'indikator' => 'Jumlah kegiatan pengabdian masyarakat di luar Kuliah Kerja Nyata (KKN) oleh mahasiswa'],
+                    ['kode' => 'C.6',  'no' => '3.6.',  'indikator' => 'Jumlah Unit Kegiatan Mahasiswa (UKM)'],
+                    ['kode' => 'C.7',  'no' => '3.7.',  'indikator' => 'Persentase mahasiswa yang mengikuti UKM terhadap jumlah mahasiswa'],
+                    ['kode' => 'C.8',  'no' => '3.8.',  'indikator' => 'Jumlah mahasiswa yang mengikuti UKM resimen mahasiswa (MENWA)'],
+                    ['kode' => 'C.9',  'no' => '3.9.',  'indikator' => 'Jumlah mahasiswa yang mengikuti organisasi (sesuai bidang keilmuan masing-masing) di luar kampus'],
+                    ['kode' => 'C.10', 'no' => '3.10.', 'indikator' => 'Jumlah prestasi mahasiswa dalam kompetisi atau perlombaan'],
+                    ['kode' => 'C.11', 'no' => '3.11.', 'indikator' => 'Jumlah mahasiswa yang mendirikan startup'],
+                    ['kode' => 'C.12', 'no' => '3.12.', 'indikator' => 'Kegiatan mahasiswa yang berkaitan dengan seni budaya'],
+                    ['kode' => 'C.13', 'no' => '3.13.', 'indikator' => 'Jumlah karya (seni, desain, dan tulis) mahasiswa yang menyuarakan nilai-nilai kebangsaan dan toleransi di media massa'],
+                    ['kode' => 'C.14', 'no' => '3.14.', 'indikator' => 'Jumlah kegiatan mahasiswa dalam menjaga lingkungan di dalam kampus dan terprogram'],
+                    ['kode' => 'C.15', 'no' => '3.15.', 'indikator' => 'Keterlibatan mahasiswa dalam Upacara Hari Besar Nasional.'],
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * Resolusi bintang predikat untuk rekap/export (0 jika unverified atau skor <= 0).
+     */
+    public static function resolveBintang(?float $totalSkor, ?string $status = null): int
+    {
+        if ($status !== null && strtoupper($status) === 'UNVERIFIED') {
+            return 0;
+        }
+        if ($totalSkor === null || $totalSkor <= 0) {
+            return 0;
+        }
+        if ($totalSkor >= 85) return 5;
+        if ($totalSkor >= 70) return 4;
+        if ($totalSkor >= 50) return 3;
+        if ($totalSkor >= 30) return 2;
+        return 1;
+    }
+
+    /**
      * Kalkulasi jumlah bintang predikat dari total skor akhir.
      */
     private function calculateBintang(float $totalSkor): int

@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BeritaController;
 use App\Http\Controllers\CmsAssetController;
 use App\Http\Controllers\ComproPreviewController;
+use App\Http\Controllers\DaftarNilaiExportController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PenugasanController;
 use App\Http\Controllers\ReviewController;
@@ -119,4 +120,10 @@ Route::middleware(['auth'])->group(function () {
 
     // Resume Laporan PDF Preview & Export (khusus admin)
     Route::get('/penugasan/{id}/resume-pdf', [PenugasanController::class, 'previewResumePdf'])->name('penugasan.resume.pdf');
+
+    // Chunked & Rate-Limited Data API untuk Export Excel/CSV Daftar Nilai (diproses di client)
+    Route::get('/admin/api/daftar-nilai/export-meta', [DaftarNilaiExportController::class, 'meta'])
+        ->name('admin.daftar-nilai.export.meta');
+    Route::get('/admin/api/daftar-nilai/export-chunk', [DaftarNilaiExportController::class, 'chunk'])
+        ->name('admin.daftar-nilai.export.chunk');
 });

@@ -11,6 +11,7 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Columns\SelectColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
@@ -114,7 +115,26 @@ class DaftarNilaiResource extends Resource
                 return null;
             })
             ->filters([
-                //
+                SelectFilter::make('tahun_periode')
+                    ->label('Tahun Periode')
+                    ->options(fn (): array => Penugasan::query()
+                        ->select('tahun_periode')
+                        ->distinct()
+                        ->orderByDesc('tahun_periode')
+                        ->pluck('tahun_periode', 'tahun_periode')
+                        ->toArray()),
+                SelectFilter::make('status')
+                    ->label('Status PT')
+                    ->options([
+                        'UNVERIFIED'  => 'UNVERIFIED',
+                        'ACTIVE'      => 'ACTIVE',
+                        'IN_PROGRESS' => 'IN_PROGRESS',
+                        'SUBMITTED'   => 'SUBMITTED',
+                        'GRADED'      => 'GRADED',
+                        'VALIDATING'  => 'VALIDATING',
+                        'FINALIZED'   => 'FINALIZED',
+                        'PUBLISHED'   => 'PUBLISHED',
+                    ]),
             ])
             ->actions([
                 Action::make('detail_nilai')
