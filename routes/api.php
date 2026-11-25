@@ -63,6 +63,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/tasks', [ReviewerController::class, 'getAssignedTasks'])->name('api.reviewer.tasks');
         Route::get('/tasks/detail/{pesertaId}', [ReviewerController::class, 'getDetailTasks'])->name('api.reviewer.detail');
         Route::post('/tasks/{pesertaId}/save-scores', [ReviewerController::class, 'saveScores'])->name('api.reviewer.save-scores');
+        Route::get('/tasks/{pesertaId}/save-status/{jobId}', [ReviewerController::class, 'saveStatus'])->name('api.reviewer.save-status');
         Route::post('/tasks/{pesertaId}/finalize', [ReviewerController::class, 'finalizeReview'])->name('api.reviewer.finalize');
         
     });

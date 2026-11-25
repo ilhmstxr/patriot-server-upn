@@ -7,6 +7,9 @@ use App\Services\PenugasanService;
 use App\Traits\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class ReviewerController extends Controller
 {
@@ -122,20 +125,82 @@ class ReviewerController extends Controller
             $scores = $request->input('scores', []);
             $notes  = $request->input('notes', []);
 
+            // Status dicatat agar browser bisa memastikan data benar-benar masuk database
+            $statusId = (string) Str::uuid();
+            Cache::put(SaveReviewerScoreJob::statusKey($statusId), [
+                'status'       => 'queued',
+                'error_type'   => null,
+                'message'      => null,
+                'user_id'      => $user->id,
+                'penugasan_id' => (int) $penugasan->id,
+            ], SaveReviewerScoreJob::STATUS_TTL);
+
             // Dispatch ke antrean FIFO 'penilaian' agar tidak membebani koneksi MySQL
             SaveReviewerScoreJob::dispatch(
                 (int) $penugasan->id,
                 $reviewerKey,
                 $scores,
-                $notes
+                $notes,
+                $statusId
             )->onQueue('penilaian');
 
             return $this->successResponse([
                 'queued' => true,
-            ], 'Skor berhasil dimasukkan ke antrean penyimpanan.');
+                'job_id' => $statusId,
+            ], 'Skor dimasukkan ke antrean penyimpanan.');
         } catch (\Throwable $e) {
-            return $this->errorResponse($e->getMessage(), $this->getErrorCode($e));
+            return $this->saveErrorResponse($e);
         }
+    }
+
+    /**
+     * Endpoint: GET /api/penugasan/reviewer/tasks/{pesertaId}/save-status/{jobId}
+     * Mengecek apakah job penyimpanan skor sudah benar-benar tersimpan ke database.
+     * Status: queued | processing | success | failed
+     */
+    public function saveStatus(Request $request, $pesertaId, string $jobId)
+    {
+        try {
+            $user = $request->user();
+            if (!$user || strtolower($user->role) !== 'reviewer') {
+                throw new \Exception("Unauthorized: Akses khusus untuk Reviewer.", 403);
+            }
+
+            $status = Cache::get(SaveReviewerScoreJob::statusKey($jobId));
+            if (!$status
+                || ($status['user_id'] ?? null) !== $user->id
+                || (int) ($status['penugasan_id'] ?? 0) !== (int) $pesertaId) {
+                throw new \Exception("Status penyimpanan tidak ditemukan atau sudah kedaluwarsa.", 404);
+            }
+
+            return $this->successResponse([
+                'status'     => $status['status'] ?? 'queued',
+                'error_type' => $status['error_type'] ?? null,
+                'message'    => $status['message'] ?? null,
+            ], 'Status penyimpanan.');
+        } catch (\Throwable $e) {
+            return $this->saveErrorResponse($e);
+        }
+    }
+
+    /**
+     * Respons error penyimpanan. Error database diberi pesan khusus "hubungi admin"
+     * tanpa membocorkan detail SQL ke browser.
+     */
+    private function saveErrorResponse(\Throwable $e)
+    {
+        if (SaveReviewerScoreJob::isDatabaseError($e)) {
+            Log::error('Reviewer save error (database): ' . $e->getMessage());
+            return $this->errorResponse(SaveReviewerScoreJob::DB_ERROR_MESSAGE, 503, ['error_type' => 'database']);
+        }
+        $code = $this->getErrorCode($e);
+        if ($code >= 500) {
+            // Error tak terduga: sembunyikan detail teknis dari pengguna
+            Log::error('Reviewer save error: ' . $e->getMessage());
+            return $this->errorResponse(SaveReviewerScoreJob::GENERAL_ERROR_MESSAGE, $code, ['error_type' => 'general']);
+        }
+        // 4xx adalah pesan yang memang kita tulis untuk pengguna (akses ditolak, dll.)
+        return $this->errorResponse($e->getMessage(), $code, ['error_type' => 'general']);
     }
 
     /**
