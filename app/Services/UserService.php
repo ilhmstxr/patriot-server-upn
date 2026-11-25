@@ -99,8 +99,14 @@ class UserService extends BaseService
             throw new Exception("Email atau password salah.", 401);
         }
 
-        // 3. Invalidate Session Lama (Single Session Policy) — TIDAK DIUBAH
-        $user->tokens()->delete();
+        // 3. Invalidate Session Lama (Single Session Policy)
+        // Reviewer boleh login di beberapa device sekaligus; role lain (mis. peserta) tetap single session.
+        if (strtolower((string) $user->role) !== 'reviewer') {
+            $user->tokens()->delete();
+        } else {
+            // Bersihkan token reviewer yang sudah kedaluwarsa agar tidak menumpuk
+            $user->tokens()->where('expires_at', '<', now())->delete();
+        }
 
         // 4. Generate Token dengan masa berlaku berbeda berdasarkan flag "Ingat saya"
         $expiresAt = $remember ? now()->addDays(30) : now()->addHours(8);
